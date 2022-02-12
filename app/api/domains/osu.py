@@ -1557,7 +1557,7 @@ async def get_osz(
         map_set_id = map_set_id[:-1]
 
     return RedirectResponse(
-        url=f"https://beatconnect.io/b/{map_set_id}?novideo={int(not no_video)}",
+        url=f"{settings.MIRROR_DOWNLOAD_URL}/{map_set_id}?{settings.DOWNLOAD_URL_NOVIDEO_PARAM}={int(not no_video)}",
         status_code=status.HTTP_301_MOVED_PERMANENTLY,
     )
 

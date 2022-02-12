@@ -19,6 +19,8 @@ OSU_API_KEY: Secret = config("OSU_API_KEY", cast=Secret)
 
 DOMAIN: str = config("DOMAIN", default="cmyui.xyz")
 MIRROR_URL: str = config("MIRROR_URL", default="https://api.chimu.moe/v1")
+MIRROR_DOWNLOAD_URL: str = config("MIRROR_DOWNLOAD_URL", default="https://osu.gatari.pw/d")
+DOWNLOAD_URL_NOVIDEO_PARAM: str = config("DOWNLOAD_URL_NOVIDEO_PARAM", default="novideo")
 
 COMMAND_PREFIX: str = config("COMMAND_PREFIX", default="!")
 
