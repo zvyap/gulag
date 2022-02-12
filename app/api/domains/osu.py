@@ -1562,7 +1562,7 @@ async def get_osz(
         query_str = f"d/{map_set_id}"
 
     return RedirectResponse(
-        url="https://osu.gatari.pw/{query_str}",
+        url=f"https://osu.gatari.pw/{query_str}",
         status_code=status.HTTP_301_MOVED_PERMANENTLY,
     )
 
