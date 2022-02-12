@@ -1556,13 +1556,8 @@ async def get_osz(
     if no_video:
         map_set_id = map_set_id[:-1]
 
-    if USING_CHIMU:
-        query_str = f"download/{map_set_id}?n={int(not no_video)}"
-    else:
-        query_str = f"d/{map_set_id}"
-
     return RedirectResponse(
-        url=f"https://osu.gatari.pw/{query_str}",
+        url=f"https://beatconnect.io/b/{map_set_id}?novideo={int(not no_video)}",
         status_code=status.HTTP_301_MOVED_PERMANENTLY,
     )
 
