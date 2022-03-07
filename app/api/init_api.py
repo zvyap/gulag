@@ -1,4 +1,6 @@
 # #!/usr/bin/env python3.9
+from __future__ import annotations
+
 import asyncio
 import os
 import pprint
@@ -17,9 +19,9 @@ from fastapi.responses import Response
 from starlette.middleware.base import RequestResponseEndpoint
 
 import app.bg_loops
+import app.settings
 import app.state
 import app.utils
-import settings
 from app.api import domains
 from app.api import middlewares
 from app.objects import collections
@@ -43,6 +45,7 @@ def init_exception_handlers(asgi_app: FastAPI) -> None:
 
 def init_middlewares(asgi_app: FastAPI) -> None:
     """Initialize our app's middleware stack."""
+    asgi_app.add_middleware(middlewares.MetricsMiddleware)
 
     @asgi_app.middleware("http")
     async def http_middleware(
@@ -64,8 +67,6 @@ def init_middlewares(asgi_app: FastAPI) -> None:
 
             # unrelated issue, raise normally
             raise exc
-
-    asgi_app.add_middleware(middlewares.MetricsMiddleware)
 
 
 def init_events(asgi_app: FastAPI) -> None:
@@ -123,7 +124,7 @@ def init_events(asgi_app: FastAPI) -> None:
 
 def init_routes(asgi_app: FastAPI) -> None:
     """Initialize our app's route endpoints."""
-    for domain in ("ppy.sh", settings.DOMAIN):
+    for domain in ("ppy.sh", app.settings.DOMAIN):
         asgi_app.host(f"a.{domain}", domains.ava.router)
 
         for subdomain in ("c", "ce", "c4", "c5", "c6"):

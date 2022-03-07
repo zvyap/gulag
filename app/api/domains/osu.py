@@ -1,4 +1,6 @@
 """ osu: handle connections from web, api, and beyond? """
+from __future__ import annotations
+
 import copy
 import hashlib
 import ipaddress
@@ -45,9 +47,9 @@ from py3rijndael import RijndaelCbc
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import app.packets
+import app.settings
 import app.state
 import app.utils
-import settings
 from app.constants import regexes
 from app.constants.clientflags import ClientFlags
 from app.constants.gamemodes import GameMode
@@ -139,7 +141,7 @@ async def osuError(
     screenshot_file: Optional[UploadFile] = File(None, alias="ss"),
 ):
     """Handle an error submitted from the osu! client."""
-    if not settings.DEBUG:
+    if not app.settings.DEBUG:
         # only handle osu-error in debug mode
         return
 
@@ -160,7 +162,7 @@ async def osuError(
     log(f'{player or "Offline user"} sent osu-error: {err_desc}', Ansi.LCYAN)
 
     # NOTE: this stacktrace can be a LOT of data
-    if settings.DEBUG and len(stacktrace) < 2000:
+    if app.settings.DEBUG and len(stacktrace) < 2000:
         printc(stacktrace[:-2], Ansi.LMAGENTA)
 
     # TODO: save error in db?
@@ -407,7 +409,7 @@ async def lastFM(
 # gulag supports both cheesegull mirrors & chimu.moe.
 # chimu.moe handles things a bit differently than cheesegull,
 # and has some extra features we'll eventually use more of.
-USING_CHIMU = "chimu.moe" in settings.MIRROR_URL
+USING_CHIMU = "chimu.moe" in app.settings.MIRROR_URL
 
 DIRECT_SET_INFO_FMTSTR = (
     "{{{setid_spelling}}}.osz|{{Artist}}|{{Title}}|{{Creator}}|"
@@ -431,9 +433,9 @@ async def osuSearchHandler(
     page_num: int = Query(..., alias="p"),
 ):
     if USING_CHIMU:
-        search_url = f"{settings.MIRROR_URL}/search"
+        search_url = f"{app.settings.MIRROR_URL}/search"
     else:
-        search_url = f"{settings.MIRROR_URL}/api/search"
+        search_url = f"{app.settings.MIRROR_URL}/api/search"
 
     params: dict[str, object] = {"amount": 100, "offset": page_num * 100}
 
@@ -670,7 +672,7 @@ async def osuSubmitModularSelector(
     ):
         # Get the PP cap for the current context.
         """# TODO: find where to put autoban pp
-        pp_cap = app.settings.AUTOBAN_PP[score.mode][score.mods & Mods.FLASHLIGHT != 0]
+        pp_cap = app.app.settings.AUTOBAN_PP[score.mode][score.mods & Mods.FLASHLIGHT != 0]
 
         if score.pp > pp_cap:
             await score.player.restrict(
@@ -733,7 +735,7 @@ async def osuSubmitModularSelector(
                 if prev_n1:
                     if score.player.id != prev_n1["id"]:
                         ann.append(
-                            f"(Previous #1: [https://{settings.DOMAIN}/u/"
+                            f"(Previous #1: [https://{app.settings.DOMAIN}/u/"
                             "{id} {name}])".format(**prev_n1),
                         )
 
@@ -895,7 +897,7 @@ async def osuSubmitModularSelector(
 
             # calculate new total weighted accuracy
             weighted_acc = sum(
-                [row["acc"] * 0.95**i for i, row in enumerate(top_100_pp)],
+                row["acc"] * 0.95**i for i, row in enumerate(top_100_pp)
             )
             bonus_acc = 100.0 / (20 * (1 - 0.95**total_scores))
             stats.acc = (weighted_acc * bonus_acc) / 100
@@ -905,9 +907,7 @@ async def osuSubmitModularSelector(
             stats_query_args["acc"] = stats.acc
 
             # calculate new total weighted pp
-            weighted_pp = sum(
-                [row["pp"] * 0.95**i for i, row in enumerate(top_100_pp)],
-            )
+            weighted_pp = sum(row["pp"] * 0.95**i for i, row in enumerate(top_100_pp))
             bonus_pp = 416.6667 * (1 - 0.95**total_scores)
             stats.pp = round(weighted_pp + bonus_pp)
 
@@ -1035,7 +1035,7 @@ async def osuSubmitModularSelector(
             "\n",
             # overall ranking chart
             "chartId:overall",
-            f"chartUrl:https://{settings.DOMAIN}/u/{score.player.id}",
+            f"chartUrl:https://{app.settings.DOMAIN}/u/{score.player.id}",
             "chartName:Overall Ranking",
             *overall_ranking_chart_entries,
             f"achievements-new:{achievements_str}",
@@ -1297,7 +1297,7 @@ async def getScores(
 
     # TODO: we could have server-specific offsets for
     # maps that mods could set for incorrectly timed maps.
-    l.append(f"0\n{bmap.full}\n{rating}")  # offset, name, rating
+    l.append(f"0\n{bmap.full_name}\n{rating}")  # offset, name, rating
 
     if not scores:
         # simply return an empty set.
@@ -1463,7 +1463,7 @@ async def osuMarkAsRead(
 
 @router.get("/web/osu-getseasonal.php")
 async def osuSeasonal():
-    return ORJSONResponse(settings.SEASONAL_BGS._items)
+    return ORJSONResponse(app.settings.SEASONAL_BGS._items)
 
 
 @router.get("/web/bancho_connect.php")
@@ -1519,7 +1519,7 @@ async def checkUpdates(
 """ Misc handlers """
 
 
-if settings.REDIRECT_OSU_URLS:
+if app.settings.REDIRECT_OSU_URLS:
     # NOTE: this will likely be removed with the addition of a frontend.
     async def osu_redirect(request: Request, _: int = Path(...)):
         return RedirectResponse(
@@ -1565,7 +1565,7 @@ async def get_osz(
         map_set_id = map_set_id[:-1]
 
     return RedirectResponse(
-        url=f"{settings.MIRROR_DOWNLOAD_URL}/{map_set_id}?{settings.DOWNLOAD_URL_NOVIDEO_PARAM}={int(not no_video)}",
+        url=f"{app,settings.MIRROR_DOWNLOAD_URL}/{map_set_id}?{settings.DOWNLOAD_URL_NOVIDEO_PARAM}={int(not no_video)}",
         status_code=status.HTTP_301_MOVED_PERMANENTLY,
     )
 
@@ -1648,7 +1648,7 @@ async def register_account(
 ):
     safe_name = username.lower().replace(" ", "_")
 
-    if not all((username, email, pw_plaintext, check)):
+    if not all((username, email, pw_plaintext)):
         return Response(
             content=b"Missing required params",
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1669,7 +1669,7 @@ async def register_account(
     if "_" in username and " " in username:
         errors["username"].append('May contain "_" and " ", but not both.')
 
-    if username in settings.DISALLOWED_NAMES:
+    if username in app.settings.DISALLOWED_NAMES:
         errors["username"].append("Disallowed username; pick another.")
 
     if "username" not in errors:
@@ -1701,7 +1701,7 @@ async def register_account(
     if len(set(pw_plaintext)) <= 3:
         errors["password"].append("Must have more than 3 unique characters.")
 
-    if pw_plaintext.lower() in settings.DISALLOWED_PASSWORDS:
+    if pw_plaintext.lower() in app.settings.DISALLOWED_PASSWORDS:
         errors["password"].append("That password was deemed too simple.")
 
     if errors:
@@ -1713,7 +1713,7 @@ async def register_account(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    if check:
+    if check == 0:
         # the client isn't just checking values,
         # they want to register the account now.
         # make the md5 & bcrypt the md5 for sql.

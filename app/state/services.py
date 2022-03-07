@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import ipaddress
 import pickle
@@ -22,8 +24,8 @@ from cmyui.logging import log
 from cmyui.logging import printc
 from cmyui.logging import Rainbow
 
+import app.settings
 import app.state
-import settings
 
 if TYPE_CHECKING:
     import aiohttp
@@ -41,19 +43,19 @@ SQL_UPDATES_FILE = Path.cwd() / "migrations/migrations.sql"
 
 """ session objects """
 
-http: "aiohttp.ClientSession"
-database = databases.Database(settings.DB_DSN)
-redis: aioredis.Redis = aioredis.from_url(settings.REDIS_DSN)
+http: aiohttp.ClientSession
+database = databases.Database(app.settings.DB_DSN)
+redis: aioredis.Redis = aioredis.from_url(app.settings.REDIS_DSN)
 
-geoloc_db: Optional["geoip2.database.Reader"] = None
+geoloc_db: Optional[geoip2.database.Reader] = None
 if GEOLOC_DB_FILE.exists():
     geoloc_db = geoip2.database.Reader(GEOLOC_DB_FILE)
 
 datadog: Optional[datadog_client.ThreadStats] = None
-if str(settings.DATADOG_API_KEY) and str(settings.DATADOG_APP_KEY):
+if str(app.settings.DATADOG_API_KEY) and str(app.settings.DATADOG_APP_KEY):
     datadog_module.initialize(
-        api_key=str(settings.DATADOG_API_KEY),
-        app_key=str(settings.DATADOG_APP_KEY),
+        api_key=str(app.settings.DATADOG_API_KEY),
+        app_key=str(app.settings.DATADOG_APP_KEY),
     )
     datadog = datadog_client.ThreadStats()
 
@@ -167,13 +169,13 @@ async def log_strange_occurrence(obj: object) -> None:
     pickled_obj: bytes = pickle.dumps(obj)
     uploaded = False
 
-    if settings.AUTOMATICALLY_REPORT_PROBLEMS:
+    if app.settings.AUTOMATICALLY_REPORT_PROBLEMS:
         # automatically reporting problems to cmyui's server
         async with http.post(
             url="https://log.cmyui.xyz/",
             headers={
-                "Gulag-Version": settings.VERSION,
-                "Gulag-Domain": settings.DOMAIN,
+                "Gulag-Version": app.settings.VERSION,
+                "Gulag-Domain": app.settings.DOMAIN,
             },
             data=pickled_obj,
         ) as resp:
@@ -223,19 +225,19 @@ class Version:
     def __hash__(self) -> int:
         return self.as_tuple.__hash__()
 
-    def __eq__(self, other: "Version") -> bool:
+    def __eq__(self, other: Version) -> bool:
         return self.as_tuple == other.as_tuple
 
-    def __lt__(self, other: "Version") -> bool:
+    def __lt__(self, other: Version) -> bool:
         return self.as_tuple < other.as_tuple
 
-    def __le__(self, other: "Version") -> bool:
+    def __le__(self, other: Version) -> bool:
         return self.as_tuple <= other.as_tuple
 
-    def __gt__(self, other: "Version") -> bool:
+    def __gt__(self, other: Version) -> bool:
         return self.as_tuple > other.as_tuple
 
-    def __ge__(self, other: "Version") -> bool:
+    def __ge__(self, other: Version) -> bool:
         return self.as_tuple >= other.as_tuple
 
     @property
@@ -243,7 +245,7 @@ class Version:
         return (self.major, self.minor, self.micro)
 
     @classmethod
-    def from_str(cls, s: str) -> Optional["Version"]:
+    def from_str(cls, s: str) -> Optional[Version]:
         if len(split := s.split(".")) == 3:
             return cls(
                 major=int(split[0]),
@@ -326,10 +328,10 @@ async def run_sql_migrations() -> None:
     if not (current_ver := await _get_current_sql_structure_version()):
         return  # already up to date (server has never run before)
 
-    latest_ver = Version.from_str(settings.VERSION)
+    latest_ver = Version.from_str(app.settings.VERSION)
 
     if latest_ver is None:
-        raise RuntimeError(f"Invalid gulag version '{settings.VERSION}'")
+        raise RuntimeError(f"Invalid gulag version '{app.settings.VERSION}'")
 
     if latest_ver == current_ver:
         return  # already up to date

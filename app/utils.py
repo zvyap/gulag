@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import inspect
 import io
+import ipaddress
 import os
 import shutil
 import socket
@@ -26,7 +29,7 @@ from cmyui.osu.replay import Keys
 from cmyui.osu.replay import ReplayFrame
 from fastapi import status
 
-import settings
+import app.settings
 
 __all__ = (
     # TODO: organize/sort these
@@ -41,7 +44,8 @@ __all__ = (
     "running_via_asgi_webserver",
     "_install_synchronous_excepthook",
     "get_appropriate_stacktrace",
-    "is_inet_address",
+    "is_valid_inet_address",
+    "is_valid_unix_address",
     "pymysql_encode",
     "escape_enum",
     "ensure_supported_platform",
@@ -60,8 +64,8 @@ DATA_PATH = Path.cwd() / ".data"
 ACHIEVEMENTS_ASSETS_PATH = DATA_PATH / "assets/medals/client"
 DEFAULT_AVATAR_PATH = DATA_PATH / "avatars/default.jpg"
 DEBUG_HOOKS_PATH = Path.cwd() / "_testing/runtime.py"
-OPPAI_PATH = Path.cwd() / "oppai-ng"
-
+OPPAI_PATH = Path.cwd() / "oppai_ng"
+OLD_OPPAI_PATH = Path.cwd() / "oppai-ng"
 
 useful_keys = (Keys.M1, Keys.M2, Keys.K1, Keys.K2)
 
@@ -222,7 +226,7 @@ def check_connection(timeout: float = 1.0) -> bool:
             try:
                 sock.connect((addr, 53))
                 return True
-            except socket.error:
+            except OSError:
                 continue
 
     # all connections failed
@@ -291,7 +295,7 @@ def _install_synchronous_excepthook() -> None:
             return
 
         printc(
-            f"gulag v{settings.VERSION} ran into an issue before starting up :(",
+            f"gulag v{app.settings.VERSION} ran into an issue before starting up :(",
             Ansi.RED,
         )
         real_excepthook(type_, value, traceback)  # type: ignore
@@ -325,14 +329,19 @@ def get_appropriate_stacktrace() -> list[dict[str, Union[str, int, dict[str, str
     ]
 
 
-def is_inet_address(addr: Union[tuple[str, int], str]) -> bool:
-    """Check whether addr is of type tuple[str, int]."""
-    return (
-        isinstance(addr, tuple)
-        and len(addr) == 2
-        and isinstance(addr[0], str)
-        and isinstance(addr[1], int)
-    )
+def is_valid_inet_address(address: str) -> bool:
+    """Check whether address is a valid ipv(4/6) address."""
+    try:
+        ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    else:
+        return True
+
+
+def is_valid_unix_address(address: str) -> bool:
+    """Check whether address is a valid unix address."""
+    return address.endswith(".sock")  # TODO: improve
 
 
 T = TypeVar("T")
@@ -387,7 +396,7 @@ def ensure_local_services_are_running() -> int:
     # how people are using the software so that i can keep it
     # in mind while developing new features & refactoring.
 
-    if settings.DB_DSN.hostname in ("localhost", "127.0.0.1", None):
+    if app.settings.DB_DSN.hostname in ("localhost", "127.0.0.1", None):
         # sql server running locally, make sure it's running
         for service in ("mysqld", "mariadb"):
             if os.path.exists(f"/var/run/{service}/{service}.pid"):
@@ -430,37 +439,54 @@ def ensure_directory_structure() -> int:
 
 def ensure_dependencies_and_requirements() -> int:
     """Make sure all of gulag's dependencies are ready."""
-    if not OPPAI_PATH.exists():
+    if (
+        not OPPAI_PATH.exists()
+        or not (OPPAI_PATH / "pybind11").exists()
+        or not any((OPPAI_PATH / "pybind11").iterdir())
+    ):
         log("No oppai-ng submodule found, attempting to clone.", Ansi.LMAGENTA)
         p = subprocess.Popen(
-            args=["git", "submodule", "init"],
+            args=["git", "submodule", "update", "--init", "--recursive"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         if exit_code := p.wait():
-            log("Failed to initialize git submodules.", Ansi.LRED)
+            log("Failed to get git submodules.", Ansi.LRED)
             return exit_code
 
-        p = subprocess.Popen(
-            args=["git", "submodule", "update"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if exit_code := p.wait():
-            log("Failed to update git submodules.", Ansi.LRED)
-            return exit_code
-
-    if not (OPPAI_PATH / "liboppai.so").exists():
+    if not (OPPAI_PATH / "oppai.so").exists():
         log("No oppai-ng library found, attempting to build.", Ansi.LMAGENTA)
         p = subprocess.Popen(
-            args=["./libbuild"],
-            cwd="oppai-ng",
+            args=["./build"],
+            cwd="oppai_ng",
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
         if exit_code := p.wait():
+            _, stderr = p.communicate()
+            print(stderr.decode())
             log("Failed to build oppai-ng automatically.", Ansi.LRED)
             return exit_code
+
+        log(
+            "oppai-ng built, please start gulag again!",
+            Ansi.LMAGENTA,
+        )  # restart is required to fix imports
+
+        if OLD_OPPAI_PATH.exists():
+            # they have the old oppai-ng folder on disk
+            # they may have made changes to their pp system,
+            # let them know that they can delete it & fork if needed
+            log(
+                "Note that with the v4.2.1 migration, the oppai-ng folder was "
+                "moved to oppai_ng (note the underscore). Your old oppai-ng "
+                "folder still exists, and if you have made diverging changes "
+                "to your PP system, you'll need to update the new oppai_ng "
+                "submodule to apply those changes.",
+                Ansi.LMAGENTA,
+            )
+
+        return 1
 
     return 0
 
@@ -489,9 +515,9 @@ def _install_debugging_hooks() -> None:
 
 def display_startup_dialog() -> None:
     """Print any general information or warnings to the console."""
-    if settings.DEVELOPER_MODE:
+    if app.settings.DEVELOPER_MODE:
         log("running in advanced mode", Ansi.LRED)
-    if settings.DEBUG:
+    if app.settings.DEBUG:
         log("running in debug mode", Ansi.LMAGENTA)
 
     # running on root grants the software potentally dangerous and
@@ -502,7 +528,7 @@ def display_startup_dialog() -> None:
             Ansi.LYELLOW,
         )
 
-        if settings.DEVELOPER_MODE:
+        if app.settings.DEVELOPER_MODE:
             log(
                 "The risk is even greater with features "
                 "such as config.advanced enabled.",

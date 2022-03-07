@@ -1,4 +1,6 @@
 """ api: gulag's developer api for interacting with server state """
+from __future__ import annotations
+
 import hashlib
 import struct
 from pathlib import Path as SystemPath
@@ -62,7 +64,7 @@ router = APIRouter(tags=["gulag API"])
 DATETIME_OFFSET = 0x89F7FF5F7B58000
 
 
-def format_clan_basic(clan: "Clan") -> dict[str, object]:
+def format_clan_basic(clan: Clan) -> dict[str, object]:
     return {
         "id": clan.id,
         "name": clan.name,
@@ -71,7 +73,7 @@ def format_clan_basic(clan: "Clan") -> dict[str, object]:
     }
 
 
-def format_player_basic(p: "Player") -> dict[str, object]:
+def format_player_basic(p: Player) -> dict[str, object]:
     return {
         "id": p.id,
         "name": p.name,
@@ -187,13 +189,13 @@ async def api_get_player_info(
         for idx, mode_stats in enumerate([dict(row) for row in rows]):
             rank = await app.state.services.redis.zrevrank(
                 f"gulag:leaderboard:{idx}",
-                resolved_user_id,
+                str(resolved_user_id),
             )
             mode_stats["rank"] = rank + 1 if rank is not None else 0
 
             country_rank = await app.state.services.redis.zrevrank(
                 f"gulag:leaderboard:{idx}:{resolved_country}",
-                resolved_user_id,
+                str(resolved_user_id),
             )
             mode_stats["country_rank"] = (
                 country_rank + 1 if country_rank is not None else 0

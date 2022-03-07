@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Optional
 
 from databases import DatabaseURL
@@ -27,7 +29,7 @@ COMMAND_PREFIX: str = config("COMMAND_PREFIX", default="!")
 SEASONAL_BGS: CommaSeparatedStrings = config(
     "SEASONAL_BGS",
     cast=CommaSeparatedStrings,
-    default=",".join(
+    default=CommaSeparatedStrings(
         [
             "https://akatsuki.pw/static/flower.png",
             "https://i.cmyui.xyz/nrMT4V2RR3PR.jpeg",
@@ -89,4 +91,4 @@ DEVELOPER_MODE: bool = config("DEVELOPER_MODE", cast=bool, default=False)
 ## WARNING: only touch this if you know how
 ##          the migrations system works.
 ##          you'll regret it.
-VERSION = "4.2.0"
+VERSION = "4.2.2"

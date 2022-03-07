@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 import hashlib
 from collections import defaultdict
@@ -13,9 +15,9 @@ from typing import Optional
 from cmyui.logging import Ansi
 from cmyui.logging import log
 
+import app.settings
 import app.state
 import app.utils
-import settings
 from app.constants.gamemodes import GameMode
 from app.utils import escape_enum
 from app.utils import pymysql_encode
@@ -26,21 +28,26 @@ __all__ = ("ensure_local_osu_file", "RankedStatus", "Beatmap", "BeatmapSet")
 
 BEATMAPS_PATH = Path.cwd() / ".data/osu"
 
-OSUAPI_GET_BEATMAPS = "https://old.ppy.sh/api/get_beatmaps"
-
 DEFAULT_LAST_UPDATE = datetime(1970, 1, 1)
 
 IGNORED_BEATMAP_CHARS = dict.fromkeys(map(ord, r':\/*<>?"|'), None)
 
 
-async def osuapiv1_getbeatmaps(**params) -> Optional[list[dict[str, Any]]]:
+async def osuapiv1_getbeatmaps(**params: str) -> Optional[list[dict[str, Any]]]:
     """Fetch data from the osu!api with a beatmap's md5."""
-    if settings.DEBUG:
+    if app.settings.DEBUG:
         log(f"Doing osu!api (getbeatmaps) request {params}", Ansi.LMAGENTA)
 
-    params["k"] = str(settings.OSU_API_KEY)
+    if not app.settings.OSU_API_KEY:
+        return
 
-    async with app.state.services.http.get(OSUAPI_GET_BEATMAPS, params=params) as resp:
+    params["k"] = str(app.settings.OSU_API_KEY)
+
+    # https://github.com/ppy/osu-api/wiki#apiget_beatmaps
+    async with app.state.services.http.get(
+        url="https://old.ppy.sh/api/get_beatmaps",
+        params=params,
+    ) as resp:
         if resp and resp.status == 200 and resp.content.total_bytes != 2:  # b'[]'
             return await resp.json()
 
@@ -57,7 +64,7 @@ async def ensure_local_osu_file(
         or hashlib.md5(osu_file_path.read_bytes()).hexdigest() != bmap_md5
     ):
         # need to get the file from the osu!api
-        if settings.DEBUG:
+        if app.settings.DEBUG:
             log(f"Doing osu!api (.osu file) request {bmap_id}", Ansi.LMAGENTA)
 
         url = f"https://old.ppy.sh/osu/{bmap_id}"
@@ -122,7 +129,7 @@ class RankedStatus(IntEnum):
 
     @classmethod
     @functools.cache
-    def from_osuapi(cls, osuapi_status: int) -> "RankedStatus":
+    def from_osuapi(cls, osuapi_status: int) -> RankedStatus:
         """Convert from osu!api status."""
         mapping: Mapping[int, RankedStatus] = defaultdict(
             lambda: cls.UpdateAvailable,
@@ -140,7 +147,7 @@ class RankedStatus(IntEnum):
 
     @classmethod
     @functools.cache
-    def from_osudirect(cls, osudirect_status: int) -> "RankedStatus":
+    def from_osudirect(cls, osudirect_status: int) -> RankedStatus:
         """Convert from osu!direct status."""
         mapping: Mapping[int, RankedStatus] = defaultdict(
             lambda: cls.UpdateAvailable,
@@ -158,7 +165,7 @@ class RankedStatus(IntEnum):
 
     @classmethod
     @functools.cache
-    def from_str(cls, status_str: str) -> "RankedStatus":
+    def from_str(cls, status_str: str) -> RankedStatus:
         """Convert from string value."""  # could perhaps have `'unranked': cls.Pending`?
         mapping: Mapping[str, RankedStatus] = defaultdict(
             lambda: cls.UpdateAvailable,
@@ -265,7 +272,7 @@ class Beatmap:
         "_pp_cache",
     )
 
-    def __init__(self, map_set: "BeatmapSet", **kwargs: Any) -> None:
+    def __init__(self, map_set: BeatmapSet, **kwargs: Any) -> None:
         self.set = map_set
 
         self.md5 = kwargs.get("md5", "")
@@ -305,22 +312,22 @@ class Beatmap:
         }  # {mode_vn: {mods: (acc/score: pp, ...), ...}}
 
     def __repr__(self) -> str:
-        return self.full
+        return self.full_name
 
     @property
-    def full(self) -> str:
+    def full_name(self) -> str:
         """The full osu! formatted name `self`."""
         return f"{self.artist} - {self.title} [{self.version}]"
 
     @property
     def url(self) -> str:
         """The osu! beatmap url for `self`."""
-        return f"https://osu.{settings.DOMAIN}/beatmaps/{self.id}"
+        return f"https://osu.{app.settings.DOMAIN}/beatmaps/{self.id}"
 
     @property
     def embed(self) -> str:
         """An osu! chat embed to `self`'s osu! beatmap page."""
-        return f"[{self.url} {self.full}]"
+        return f"[{self.url} {self.full_name}]"
 
     # TODO: cache these & standardize method for changing status
 
@@ -601,7 +608,7 @@ class BeatmapSet:
     @property
     def url(self) -> str:  # same as above, just no beatmap id
         """The online url for this beatmap set."""
-        return f"https://osu.{settings.DOMAIN}/beatmapsets/{self.id}"
+        return f"https://osu.{app.settings.DOMAIN}/beatmapsets/{self.id}"
 
     @functools.cache
     def all_officially_ranked_or_approved(self) -> bool:
@@ -638,7 +645,7 @@ class BeatmapSet:
 
         # the delta between cache invalidations will increase depending
         # on how long it's been since the map was last updated on osu!
-        last_map_update = max([bmap.last_update for bmap in self.maps])
+        last_map_update = max(bmap.last_update for bmap in self.maps)
         update_delta = current_datetime - last_map_update
 
         # with a minimum of 2 hours, add 5 hours per year since it's update.
@@ -658,7 +665,7 @@ class BeatmapSet:
     async def _update_if_available(self) -> None:
         """Fetch newest data from the osu!api, check for differences
         and propogate any update into our cache & database."""
-        if not settings.OSU_API_KEY:
+        if not app.settings.OSU_API_KEY:
             return
 
         if api_data := await osuapiv1_getbeatmaps(s=self.id):
@@ -694,7 +701,7 @@ class BeatmapSet:
             for new_id, new_map in new_maps.items():
                 if new_id not in old_maps:
                     # new map we don't have locally, add it
-                    bmap: "Beatmap" = Beatmap.__new__(Beatmap)
+                    bmap: Beatmap = Beatmap.__new__(Beatmap)
                     bmap.id = new_id
 
                     bmap._parse_from_osuapi_resp(new_map)
@@ -882,7 +889,7 @@ class BeatmapSet:
 
             for api_bmap in api_data:
                 # newer version available for this map
-                bmap: "Beatmap" = Beatmap.__new__(Beatmap)
+                bmap: Beatmap = Beatmap.__new__(Beatmap)
                 bmap.id = int(api_bmap["beatmap_id"])
 
                 if bmap.id in current_maps:

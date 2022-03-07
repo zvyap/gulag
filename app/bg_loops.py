@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import time
 
@@ -5,8 +7,8 @@ from cmyui.logging import Ansi
 from cmyui.logging import log
 
 import app.packets
+import app.settings
 import app.state
-import settings
 from app.constants.privileges import Privileges
 
 __all__ = ("initialize_housekeeping_tasks",)
@@ -33,7 +35,7 @@ async def initialize_housekeeping_tasks() -> None:
 async def _remove_expired_donation_privileges(interval: int) -> None:
     """Remove donation privileges from users with expired sessions."""
     while True:
-        if settings.DEBUG:
+        if app.settings.DEBUG:
             log("Removing expired donation privileges.", Ansi.LMAGENTA)
 
         expired_donors = await app.state.services.database.fetch_all(

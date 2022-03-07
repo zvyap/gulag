@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 import uuid
 from dataclasses import dataclass
@@ -17,8 +19,8 @@ from cmyui.logging import Ansi
 from cmyui.logging import log
 
 import app.packets
+import app.settings
 import app.state
-import settings
 from app.constants.gamemodes import GameMode
 from app.constants.mods import Mods
 from app.constants.privileges import ClientPrivileges
@@ -135,7 +137,7 @@ MAIN_MENU = Menu(
 
 
 class LastNp(TypedDict):
-    bmap: "Beatmap"
+    bmap: Beatmap
     mode_vn: int
     timeout: float
 
@@ -251,10 +253,10 @@ class Player:
         self.match: Optional[Match] = None
         self.stealth = False
 
-        self.clan: Optional["Clan"] = extras.get("clan", None)
-        self.clan_priv: Optional["ClanPrivileges"] = extras.get("clan_priv", None)
+        self.clan: Optional[Clan] = extras.get("clan", None)
+        self.clan_priv: Optional[ClanPrivileges] = extras.get("clan_priv", None)
 
-        self.achievements: set["Achievement"] = set()
+        self.achievements: set[Achievement] = set()
 
         self.geoloc: app.state.services.Geolocation = extras.get(
             "geoloc",
@@ -322,7 +324,7 @@ class Player:
         # NOTE: this is currently never wiped because
         # domain & id cannot be changed in-game; if this
         # ever changes, it will need to be wiped.
-        return f"https://{settings.DOMAIN}/u/{self.id}"
+        return f"https://{app.settings.DOMAIN}/u/{self.id}"
 
     @cached_property
     def embed(self) -> str:
@@ -338,7 +340,7 @@ class Player:
         # NOTE: this is currently never wiped because
         # domain & id cannot be changed in-game; if this
         # ever changes, it will need to be wiped.
-        return f"https://a.{settings.DOMAIN}/{self.id}"
+        return f"https://a.{app.settings.DOMAIN}/{self.id}"
 
     @cached_property
     def full_name(self) -> str:
@@ -495,6 +497,16 @@ class Player:
             {"from": admin.id, "to": self.id, "action": "restrict", "msg": reason},
         )
 
+        for mode in (0, 1, 2, 3, 4, 5, 6, 8):
+            await app.state.services.redis.zrem(
+                f"gulag:leaderboard:{mode}",
+                self.id,
+            )
+            await app.state.services.redis.zrem(
+                f'gulag:leaderboard:{mode}:{self.geoloc["country"]["acronym"]}',
+                self.id,
+            )
+
         if "restricted" in self.__dict__:
             del self.restricted  # wipe cached_property
 
@@ -502,7 +514,7 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
-        if webhook_url := settings.DISCORD_AUDIT_LOG_WEBHOOK:
+        if webhook_url := app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
             webhook = Webhook(webhook_url, content=log_msg)
             await webhook.post(app.state.services.http)
 
@@ -522,6 +534,20 @@ class Player:
             {"from": admin.id, "to": self.id, "action": "unrestrict", "msg": reason},
         )
 
+        if not self.online:
+            async with app.state.services.database.connection() as db_conn:
+                await self.stats_from_sql_full(db_conn)
+
+        for mode, stats in self.stats.items():
+            await app.state.services.redis.zadd(
+                f"gulag:leaderboard:{mode.value}",
+                {str(self.id): stats.pp},
+            )
+            await app.state.services.redis.zadd(
+                f"gulag:leaderboard:{mode.value}:{self.geoloc['country']['acronym']}",
+                {str(self.id): stats.pp},
+            )
+
         if "restricted" in self.__dict__:
             del self.restricted  # wipe cached_property
 
@@ -529,7 +555,7 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
-        if webhook_url := settings.DISCORD_AUDIT_LOG_WEBHOOK:
+        if webhook_url := app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
             webhook = Webhook(webhook_url, content=log_msg)
             await webhook.post(app.state.services.http)
 
@@ -642,7 +668,7 @@ class Player:
     def leave_match(self) -> None:
         """Attempt to remove `self` from their match."""
         if not self.match:
-            if settings.DEBUG:
+            if app.settings.DEBUG:
                 log(f"{self} tried leaving a match they're not in?", Ansi.LYELLOW)
             return
 
@@ -746,7 +772,7 @@ class Player:
                 if c.can_read(p.priv):
                     p.enqueue(chan_info_packet)
 
-        if settings.DEBUG:
+        if app.settings.DEBUG:
             log(f"{self} joined {c}.")
 
         return True
@@ -777,10 +803,10 @@ class Player:
                 if c.can_read(p.priv):
                     p.enqueue(chan_info_packet)
 
-        if settings.DEBUG:
+        if app.settings.DEBUG:
             log(f"{self} left {c}.")
 
-    def add_spectator(self, p: "Player") -> None:
+    def add_spectator(self, p: Player) -> None:
         """Attempt to add `p` to `self`'s spectators."""
         chan_name = f"#spec_{self.id}"
 
@@ -819,7 +845,7 @@ class Player:
 
         log(f"{p} is now spectating {self}.")
 
-    def remove_spectator(self, p: "Player") -> None:
+    def remove_spectator(self, p: Player) -> None:
         """Attempt to remove `p` from `self`'s spectators."""
         self.spectators.remove(p)
         p.spectating = None
@@ -943,7 +969,7 @@ class Player:
 
         rank = await app.state.services.redis.zrevrank(
             f"gulag:leaderboard:{mode.value}",
-            self.id,
+            str(self.id),
         )
         return rank + 1 if rank is not None else 0
 
@@ -954,7 +980,7 @@ class Player:
         country = self.geoloc["country"]["acronym"]
         rank = await app.state.services.redis.zrevrank(
             f"gulag:leaderboard:{mode.value}:{country}",
-            self.id,
+            str(self.id),
         )
 
         return rank + 1 if rank is not None else 0
@@ -966,13 +992,13 @@ class Player:
         # global rank
         await app.state.services.redis.zadd(
             f"gulag:leaderboard:{mode.value}",
-            {self.id: stats.pp},
+            {str(self.id): stats.pp},
         )
 
         # country rank
         await app.state.services.redis.zadd(
             f"gulag:leaderboard:{mode.value}:{country}",
-            {self.id: stats.pp},
+            {str(self.id): stats.pp},
         )
 
         return await self.get_global_rank(mode)
@@ -1048,7 +1074,7 @@ class Player:
             self._queue.clear()
             return data
 
-    def send(self, msg: str, sender: "Player", chan: Optional[Channel] = None) -> None:
+    def send(self, msg: str, sender: Player, chan: Optional[Channel] = None) -> None:
         """Enqueue `sender`'s `msg` to `self`. Sent in `chan`, or dm."""
         self.enqueue(
             app.packets.send_message(

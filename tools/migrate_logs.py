@@ -1,4 +1,6 @@
 #!/usr/bin/env python3.9
+from __future__ import annotations
+
 import asyncio
 import os
 import re
@@ -9,7 +11,7 @@ import databases
 sys.path.insert(0, os.path.abspath(os.pardir))
 os.chdir(os.path.abspath(os.pardir))
 
-import settings
+import app.settings
 
 LOG_REGEX = re.compile(
     r"<(.*)\((.*)\)> (?P<action>unrestricted|restricted|unsilenced|silenced|added note) ?(\((.*)\))? ?(\: (?P<note>.*))? ?(?:for (?P<reason>.*))?",
@@ -17,7 +19,7 @@ LOG_REGEX = re.compile(
 
 
 async def main() -> int:
-    async with databases.Database(settings.DB_DSN) as db:
+    async with databases.Database(app.settings.DB_DSN) as db:
         async with (
             db.connection() as select_conn,
             db.connection() as update_conn,

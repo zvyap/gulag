@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import copy
 import importlib
@@ -30,14 +32,13 @@ from typing import Union
 import cmyui.utils
 import psutil
 import timeago
-from cmyui.osu.oppai_ng import OppaiWrapper
 from peace_performance_python.objects import Beatmap as PeaceMap
 from peace_performance_python.objects import Calculator as PeaceCalculator
 
 import app.packets
+import app.settings
 import app.state
 import app.utils
-import settings
 from app.constants import regexes
 from app.constants.gamemodes import GameMode
 from app.constants.gamemodes import GAMEMODE_REPR_LIST
@@ -59,6 +60,11 @@ from app.objects.player import Player
 from app.objects.score import SubmissionStatus
 from app.utils import seconds_readable
 
+try:
+    from oppai_ng.oppai import OppaiWrapper
+except ModuleNotFoundError:
+    pass  # utils will handle this for us
+
 if TYPE_CHECKING:
     from app.objects.channel import Channel
 
@@ -73,7 +79,7 @@ class Context:
     trigger: str
     args: Sequence[str]
 
-    recipient: Union["Channel", Player]
+    recipient: Union[Channel, Player]
 
 
 Callback = Callable[[Context], Awaitable[Optional[str]]]
@@ -165,7 +171,7 @@ def command(
 @command(Privileges.NORMAL, aliases=["", "h"], hidden=True)
 async def _help(ctx: Context) -> Optional[str]:
     """Show all documented commands the player can access."""
-    prefix = settings.COMMAND_PREFIX
+    prefix = app.settings.COMMAND_PREFIX
     l = ["Individual commands", "-----------"]
 
     for cmd in regular_commands:
@@ -267,7 +273,7 @@ async def changename(ctx: Context) -> Optional[str]:
     if "_" in name and " " in name:
         return 'May contain "_" and " ", but not both.'
 
-    if name in settings.DISALLOWED_NAMES:
+    if name in app.settings.DISALLOWED_NAMES:
         return "Disallowed username; pick another."
 
     if await app.state.services.database.fetch_one(
@@ -311,7 +317,7 @@ async def maplink(ctx: Context) -> Optional[str]:
 
     # gatari.pw & nerina.pw are pretty much the only
     # reliable mirrors i know of? perhaps beatconnect
-    return f"[https://osu.gatari.pw/d/{bmap.set_id} {bmap.full}]"
+    return f"[https://osu.gatari.pw/d/{bmap.set_id} {bmap.full_name}]"
 
 
 @command(Privileges.NORMAL, aliases=["last", "r"])
@@ -408,7 +414,7 @@ async def top(ctx: Context) -> Optional[str]:
     return "\n".join(
         [f"Top 10 scores for {p.embed} ({ctx.args[0]})."]
         + [
-            TOP_SCORE_FMTSTR.format(idx=idx + 1, domain=settings.DOMAIN, **s)
+            TOP_SCORE_FMTSTR.format(idx=idx + 1, domain=app.settings.DOMAIN, **s)
             for idx, s in enumerate(scores)
         ],
     )
@@ -474,7 +480,7 @@ async def _with(ctx: Context) -> Optional[str]:
         msg = []
 
         if mode_vn == 0:
-            with OppaiWrapper("oppai-ng/liboppai.so") as ezpp:
+            with OppaiWrapper() as ezpp:
                 if mods is not None:
                     ezpp.set_mods(int(mods))
                     msg.append(f"{mods!r}")
@@ -491,7 +497,7 @@ async def _with(ctx: Context) -> Optional[str]:
                     ezpp.set_accuracy_percent(acc)
                     msg.append(f"{acc:.2f}%")
 
-                ezpp.calculate(osu_file_path)
+                ezpp.calculate(str(osu_file_path))
                 pp, sr = ezpp.get_pp(), ezpp.get_sr()
 
                 return f"{' '.join(msg)}: {pp:.2f}pp ({sr:.2f}*)"
@@ -1043,9 +1049,9 @@ _fake_users = []
 @command(Privileges.DEVELOPER, aliases=["fu"])
 async def fakeusers(ctx: Context) -> Optional[str]:
     """Add fake users to the online player list (for testing)."""
-    # NOTE: this is mostly just for speedtesting things
-    # regarding presences/stats. it's implementation is
-    # indeed quite cursed, but rather efficient.
+    # NOTE: this function is *very* performance-oriented.
+    #       the implementation is pretty cursed.
+
     if (
         len(ctx.args) != 2
         or ctx.args[0] not in ("add", "rm")
@@ -1056,7 +1062,7 @@ async def fakeusers(ctx: Context) -> Optional[str]:
     action = ctx.args[0]
     amount = int(ctx.args[1])
     if not 0 < amount <= 100_000:
-        return "Amount must be in range 0-100k."
+        return "Amount must be in range 1-100k."
 
     # we start at half way through
     # the i32 space for fake user ids.
@@ -1067,61 +1073,70 @@ async def fakeusers(ctx: Context) -> Optional[str]:
     data = bytearray()
 
     if action == "add":
-        const_uinfo = {  # non important stuff
-            "utc_offset": 0,
-            "osu_ver": "dn",
-            "pm_private": False,
-            "clan": None,
-            "clan_priv": None,
-            "priv": Privileges.NORMAL | Privileges.VERIFIED,
-            "silence_end": 0,
-            "login_time": 0x7FFFFFFF,  # never auto-dc
-        }
+        ## create static data - no need to redo everything for each iteration
+        # NOTE: this is where most of the efficiency of this command comes from
 
-        _stats = app.packets.user_stats(ctx.player)
+        static_player = Player(
+            id=0,
+            name="",
+            utc_offset=0,
+            osu_ver="",
+            pm_private=False,
+            clan=None,
+            clan_priv=None,
+            priv=Privileges.NORMAL | Privileges.VERIFIED,
+            silence_end=0,
+            login_time=0x7FFFFFFF,  # never auto-dc
+        )
 
+        static_player.stats[GameMode.VANILLA_OSU] = copy.copy(
+            ctx.player.stats[GameMode.VANILLA_OSU],
+        )
+
+        static_presence = struct.pack(
+            "<BBBffi",
+            -5 + 24,  # timezone (-5 GMT: EST)
+            38,  # country (canada)
+            0b11111,  # all in-game privs
+            0.0,  # latitude
+            0.0,  # longitude
+            1,  # global rank
+        )
+
+        static_stats = app.packets.user_stats(ctx.player)
+
+        ## create new fake players
+        new_fakes = []
+
+        # get the current number of fake users
         if _fake_users:
-            current_fakes = max([x.id for x in _fake_users]) - (FAKE_ID_START - 1)
+            current_fakes = max(x.id for x in _fake_users) - (FAKE_ID_START - 1)
         else:
             current_fakes = 0
 
-        start_id = FAKE_ID_START + current_fakes
-        end_id = start_id + amount
-        vn_std = GameMode.VANILLA_OSU
+        start_user_id = FAKE_ID_START + current_fakes
+        end_user_id = start_user_id + amount
 
-        base_player = Player(id=0, name="", **const_uinfo)
-        base_player.stats[vn_std] = copy.copy(ctx.player.stats[vn_std])
-        new_fakes = []
+        # XXX: very hot (blocking) loop, can run up to 100k times.
+        #      performance improvements are very welcome!
+        for fake_user_id in range(start_user_id, end_user_id):
+            # create new fake player, using the static data as a base
+            fake = copy.copy(static_player)
+            fake.id = fake_user_id
+            fake.name = (name := f"fake #{fake_user_id - (FAKE_ID_START - 1)}")
 
-        # static part of the presence packet,
-        # no need to redo this every iteration.
-        static_presence = struct.pack(
-            "<BBBffi",
-            19,  # -5 (EST) + 24
-            38,  # country (canada)
-            0b11111,  # all in-game privs
-            0.0,
-            0.0,  # lat, lon
-            1,  # rank #1
-        )
-
-        for i in range(start_id, end_id):
-            # create new fake player from base
-            name = f"fake #{i - (FAKE_ID_START - 1)}"
-            fake = copy.copy(base_player)
-            fake.id = i
-            fake.name = name
+            name_len = len(name)
 
             # append userpresence packet
             data += struct.pack(
                 "<HxIi",
-                83,
-                21 + len(name),
-                i,  # packetid  # packet len  # userid
+                83,  # packetid
+                21 + name_len,  # packet len
+                fake_user_id,  # userid
             )
-            data += f"\x0b{chr(len(name))}{name}".encode()
+            data += f"\x0b{chr(name_len)}{name}".encode()  # username (hacky uleb)
             data += static_presence
-            data += _stats
+            data += static_stats
 
             new_fakes.append(fake)
 
@@ -1134,7 +1149,7 @@ async def fakeusers(ctx: Context) -> Optional[str]:
     else:  # remove
         len_fake_users = len(_fake_users)
         if amount > len_fake_users:
-            return f"Too many! only {len_fake_users} remaining."
+            return f"Too many! Only {len_fake_users} fake users remain."
 
         to_remove = _fake_users[len_fake_users - amount :]
         logout_packet_header = b"\x0c\x00\x00\x05\x00\x00\x00"
@@ -1196,7 +1211,7 @@ async def recalc(ctx: Context) -> Optional[str]:
             app.state.services.database.connection() as score_select_conn,
             app.state.services.database.connection() as update_conn,
         ):
-            with OppaiWrapper("oppai-ng/liboppai.so") as ezpp:
+            with OppaiWrapper() as ezpp:
                 ezpp.set_mode(0)  # TODO: other modes
                 for mode in (0, 4, 8):  # vn!std, rx!std, ap!std
                     # TODO: this should be using an async generator
@@ -1211,7 +1226,7 @@ async def recalc(ctx: Context) -> Optional[str]:
                         ezpp.set_combo(row["max_combo"])
                         ezpp.set_accuracy_percent(row["acc"])
 
-                        ezpp.calculate(osu_file_path)
+                        ezpp.calculate(str(osu_file_path))
 
                         pp = ezpp.get_pp()
 
@@ -1256,7 +1271,7 @@ async def recalc(ctx: Context) -> Optional[str]:
                         )
                         continue
 
-                    with OppaiWrapper("oppai-ng/liboppai.so") as ezpp:
+                    with OppaiWrapper() as ezpp:
                         ezpp.set_mode(0)  # TODO: other modes
                         for mode in (0, 4, 8):  # vn!std, rx!std, ap!std
                             # TODO: this should be using an async generator
@@ -1271,7 +1286,7 @@ async def recalc(ctx: Context) -> Optional[str]:
                                 ezpp.set_combo(row["max_combo"])
                                 ezpp.set_accuracy_percent(row["acc"])
 
-                                ezpp.calculate(osu_file_path)
+                                ezpp.calculate(str(osu_file_path))
 
                                 pp = ezpp.get_pp()
 
@@ -1298,8 +1313,8 @@ async def recalc(ctx: Context) -> Optional[str]:
 @command(Privileges.DEVELOPER, hidden=True)
 async def debug(ctx: Context) -> Optional[str]:
     """Toggle the console's debug setting."""
-    settings.DEBUG = not settings.DEBUG
-    return f"Toggled {'on' if settings.DEBUG else 'off'}."
+    app.settings.DEBUG = not app.settings.DEBUG
+    return f"Toggled {'on' if app.settings.DEBUG else 'off'}."
 
 
 # NOTE: these commands will likely be removed
@@ -1418,7 +1433,7 @@ async def reload(ctx: Context) -> Optional[str]:
 async def server(ctx: Context) -> Optional[str]:
     """Retrieve performance data about the server."""
 
-    build_str = f"gulag v{settings.VERSION!r} ({settings.DOMAIN})"
+    build_str = f"gulag v{app.settings.VERSION!r} ({app.settings.DOMAIN})"
 
     # get info about this process
     proc = psutil.Process(os.getpid())
@@ -1454,10 +1469,10 @@ async def server(ctx: Context) -> Optional[str]:
     reqs = (Path.cwd() / "requirements.txt").read_text().splitlines()
     pkg_sections = [reqs[i : i + 3] for i in range(0, len(reqs), 3)]
 
-    mirror_url = settings.MIRROR_URL
-    using_osuapi = settings.OSU_API_KEY != ""
-    advanced_mode = settings.DEVELOPER_MODE
-    auto_logging = settings.AUTOMATICALLY_REPORT_PROBLEMS
+    mirror_url = app.settings.MIRROR_URL
+    using_osuapi = app.settings.OSU_API_KEY != ""
+    advanced_mode = app.settings.DEVELOPER_MODE
+    auto_logging = app.settings.AUTOMATICALLY_REPORT_PROBLEMS
 
     return "\n".join(
         [
@@ -1478,7 +1493,7 @@ async def server(ctx: Context) -> Optional[str]:
     )
 
 
-if settings.DEVELOPER_MODE:
+if app.settings.DEVELOPER_MODE:
     """Advanced (& potentially dangerous) commands"""
 
     # NOTE: some of these commands are potentially dangerous, and only
@@ -1546,7 +1561,7 @@ if settings.DEVELOPER_MODE:
 
 
 def ensure_match(
-    f: Callable[[Context, "Match"], Awaitable[Optional[R]]],
+    f: Callable[[Context, Match], Awaitable[Optional[R]]],
 ) -> Callable[[Context], Awaitable[Optional[R]]]:
     @wraps(f)
     async def wrapper(ctx: Context) -> Optional[R]:
@@ -1577,7 +1592,7 @@ def ensure_match(
 @ensure_match
 async def mp_help(ctx: Context, match: "Match") -> Optional[str]:
     """Show all documented multiplayer commands the player can access."""
-    prefix = settings.COMMAND_PREFIX
+    prefix = app.settings.COMMAND_PREFIX
     cmds = []
 
     for cmd in mp_commands.commands:
@@ -1708,7 +1723,7 @@ async def mp_map(ctx: Context, match: "Match") -> Optional[str]:
 
     match.map_id = bmap.id
     match.map_md5 = bmap.md5
-    match.map_name = bmap.full
+    match.map_name = bmap.full_name
 
     match.mode = bmap.mode
 
@@ -2211,7 +2226,7 @@ async def mp_pick(ctx: Context, match: "Match") -> Optional[str]:
     bmap = match.pool.maps[(mods, slot)]
     match.map_md5 = bmap.md5
     match.map_id = bmap.id
-    match.map_name = bmap.full
+    match.map_name = bmap.full_name
 
     # TODO: some kind of abstraction allowing
     # for something like !mp pick fm.
@@ -2241,7 +2256,7 @@ async def mp_pick(ctx: Context, match: "Match") -> Optional[str]:
 @pool_commands.add(Privileges.TOURNAMENT, aliases=["h"], hidden=True)
 async def pool_help(ctx: Context) -> Optional[str]:
     """Show all documented mappool commands the player can access."""
-    prefix = settings.COMMAND_PREFIX
+    prefix = app.settings.COMMAND_PREFIX
     cmds = []
 
     for cmd in pool_commands.commands:
@@ -2448,7 +2463,7 @@ async def pool_info(ctx: Context) -> Optional[str]:
 @clan_commands.add(Privileges.NORMAL, aliases=["h"])
 async def clan_help(ctx: Context) -> Optional[str]:
     """Show all documented clan commands the player can access."""
-    prefix = settings.COMMAND_PREFIX
+    prefix = app.settings.COMMAND_PREFIX
     cmds = []
 
     for cmd in clan_commands.commands:
@@ -2653,7 +2668,7 @@ async def process_commands(
     # or simply False if we don't have any command hits.
     start_time = clock_ns()
 
-    prefix_len = len(settings.COMMAND_PREFIX)
+    prefix_len = len(app.settings.COMMAND_PREFIX)
     trigger, *args = msg[prefix_len:].strip().split(" ")
 
     # case-insensitive triggers

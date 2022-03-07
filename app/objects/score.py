@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 import math
 from datetime import datetime
@@ -7,7 +9,6 @@ from pathlib import Path
 from typing import Optional
 from typing import TYPE_CHECKING
 
-from cmyui.osu.oppai_ng import OppaiWrapper
 from peace_performance_python.objects import Beatmap as PeaceMap
 from peace_performance_python.objects import Calculator as PeaceCalculator
 
@@ -18,6 +19,11 @@ from app.constants.mods import Mods
 from app.objects.beatmap import Beatmap
 from app.utils import escape_enum
 from app.utils import pymysql_encode
+
+try:
+    from oppai_ng.oppai import OppaiWrapper
+except ModuleNotFoundError:
+    pass  # utils will handle this for us
 
 if TYPE_CHECKING:
     from app.objects.player import Player
@@ -44,7 +50,7 @@ class Grade(IntEnum):
 
     @classmethod
     @functools.cache
-    def from_str(cls, s: str) -> "Grade":
+    def from_str(cls, s: str) -> Grade:
         return {
             "xh": Grade.XH,
             "x": Grade.X,
@@ -146,7 +152,7 @@ class Score:
         # TODO: check whether the reamining Optional's should be
         self.id: Optional[int] = None
         self.bmap: Optional[Beatmap] = None
-        self.player: Optional["Player"] = None
+        self.player: Optional[Player] = None
 
         self.mode: GameMode
         self.mods: Mods
@@ -184,7 +190,7 @@ class Score:
     def __repr__(self) -> str:  # maybe shouldn't be so long?
         return (
             f"<{self.acc:.2f}% {self.max_combo}x {self.nmiss}M "
-            f"#{self.rank} on {self.bmap.full} for {self.pp:,.2f}pp>"
+            f"#{self.rank} on {self.bmap.full_name} for {self.pp:,.2f}pp>"
         )
 
     """Classmethods to fetch a score object from various data types."""
@@ -330,7 +336,7 @@ class Score:
         mode_vn = self.mode.as_vanilla
 
         if mode_vn == 0:  # std
-            with OppaiWrapper("oppai-ng/liboppai.so") as ezpp:
+            with OppaiWrapper() as ezpp:
                 if self.mods:
                     ezpp.set_mods(int(self.mods))
 
@@ -341,7 +347,7 @@ class Score:
                 ezpp.set_nmiss(self.nmiss)  # clobbers acc
                 ezpp.set_accuracy_percent(self.acc)
 
-                ezpp.calculate(osu_file_path)
+                ezpp.calculate(str(osu_file_path))
 
                 pp = ezpp.get_pp()
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 from enum import IntEnum
 from enum import unique
@@ -47,7 +49,7 @@ class GameMode(IntEnum):
 
     @classmethod
     @functools.lru_cache(maxsize=32)
-    def from_params(cls, mode_vn: int, mods: Mods) -> "GameMode":
+    def from_params(cls, mode_vn: int, mods: Mods) -> GameMode:
         mode = mode_vn
 
         if mods & Mods.AUTOPILOT:
