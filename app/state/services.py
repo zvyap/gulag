@@ -8,10 +8,11 @@ import secrets
 from pathlib import Path
 from typing import AsyncGenerator
 from typing import AsyncIterator
+from typing import Mapping
+from typing import MutableMapping
 from typing import Optional
 from typing import TYPE_CHECKING
 from typing import TypedDict
-from typing import Union
 
 import aioredis
 import databases
@@ -26,12 +27,11 @@ from cmyui.logging import Rainbow
 
 import app.settings
 import app.state
+from app._typing import IPAddress
 
 if TYPE_CHECKING:
     import aiohttp
     import databases.core
-
-IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
 
 
 STRANGE_LOG_DIR = Path.cwd() / ".data/logs"
@@ -58,6 +58,8 @@ if str(app.settings.DATADOG_API_KEY) and str(app.settings.DATADOG_APP_KEY):
         app_key=str(app.settings.DATADOG_APP_KEY),
     )
     datadog = datadog_client.ThreadStats()
+
+ip_resolver: IPResolver
 
 housekeeping_tasks: list[asyncio.Task] = []
 
@@ -113,7 +115,28 @@ country_codes = {
 # fmt: on
 
 
-def fetch_geoloc_db(ip: IPAddress) -> Optional[Geolocation]:
+class IPResolver:
+    def __init__(self) -> None:
+        self.cache: MutableMapping[str, IPAddress] = {}
+
+    def get_ip(self, headers: Mapping[str, str]) -> IPAddress:
+        """Resolve the IP address from the headers."""
+        if (ip_str := headers.get("CF-Connecting-IP")) is None:
+            forwards = headers["X-Forwarded-For"].split(",")
+
+            if len(forwards) != 1:
+                ip_str = forwards[0]
+            else:
+                ip_str = headers["X-Real-IP"]
+
+        if (ip := self.cache.get(ip_str)) is None:
+            ip = ipaddress.ip_address(ip_str)
+            self.cache[ip_str] = ip
+
+        return ip
+
+
+def fetch_geoloc_db(ip: IPAddress) -> Geolocation:
     """Fetch geolocation data based on ip (using local db)."""
     assert geoloc_db is not None
 
@@ -141,7 +164,7 @@ async def fetch_geoloc_web(ip: IPAddress) -> Optional[Geolocation]:
     async with http.get(url) as resp:
         if not resp or resp.status != 200:
             log("Failed to get geoloc data: request failed.", Ansi.LRED)
-            return
+            return None
 
         status, *lines = (await resp.text()).split("\n")
 
@@ -151,7 +174,7 @@ async def fetch_geoloc_web(ip: IPAddress) -> Optional[Geolocation]:
                 err_msg += f" ({url})"
 
             log(f"Failed to get geoloc data: {err_msg}.", Ansi.LRED)
-            return
+            return None
 
     acronym = lines[1].lower()
 
@@ -253,6 +276,8 @@ class Version:
                 micro=int(split[2]),
             )
 
+        return None
+
 
 async def _get_latest_dependency_versions() -> AsyncGenerator[
     tuple[str, Version, Version],
@@ -322,6 +347,8 @@ async def _get_current_sql_structure_version() -> Optional[Version]:
     if res:
         return Version(*map(int, res))
 
+    return None
+
 
 async def run_sql_migrations() -> None:
     """Update the sql structure, if it has changed."""
@@ -339,8 +366,8 @@ async def run_sql_migrations() -> None:
     # version changed; there may be sql changes.
     content = SQL_UPDATES_FILE.read_text()
 
-    queries = []
-    q_lines = []
+    queries: list[str] = []
+    q_lines: list[str] = []
 
     update_ver = None
 

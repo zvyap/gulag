@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import re
 import struct
 import time
@@ -13,13 +12,12 @@ from pathlib import Path
 from typing import Callable
 from typing import Literal
 from typing import Optional
-from typing import Union
+from typing import TypedDict
 
 import bcrypt
 import databases.core
 from cmyui.logging import Ansi
 from cmyui.logging import log
-from cmyui.logging import RGB
 from cmyui.utils import magnitude_fmt_time
 from fastapi import APIRouter
 from fastapi import Response
@@ -34,6 +32,7 @@ import app.settings
 import app.state
 import app.utils
 from app import commands
+from app._typing import IPAddress
 from app.constants import regexes
 from app.constants.gamemodes import GameMode
 from app.constants.mods import Mods
@@ -63,8 +62,6 @@ try:
     from oppai_ng.oppai import OppaiWrapper
 except ModuleNotFoundError:
     pass  # utils will handle this for us
-
-IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
 
 BEATMAPS_PATH = Path.cwd() / ".data/osu"
 
@@ -104,90 +101,54 @@ async def bancho_http_handler():
 @router.post("/")
 async def bancho_handler(
     request: Request,
-    x_forwarded_for: str = Header(None),
-    x_real_ip: str = Header(None),
-    cf_connecting_ip: Optional[str] = Header(None),
+    osu_token: Optional[str] = Header(None),
     user_agent: Literal["osu!"] = Header(...),
-    host: str = Header(None),
 ):
-    if cf_connecting_ip is not None:
-        ip_str = cf_connecting_ip
-    else:
-        # if the request has been forwarded, get the origin
-        forwards = x_forwarded_for.split(",")
-        if len(forwards) != 1:
-            ip_str = forwards[0]
-        else:
-            ip_str = x_real_ip
+    ip = app.state.services.ip_resolver.get_ip(request.headers)
 
-    if ip_str in app.state.cache.ip:
-        ip = app.state.cache.ip[ip_str]
-    else:
-        ip = ipaddress.ip_address(ip_str)
-        app.state.cache.ip[ip_str] = ip
-
-    if user_agent != "osu!":
-        url = f"{request.method} {host}{request['path']}"
-        log(f"[{ip}] {url} missing user-agent.", Ansi.LRED)
-        return
-
-    # check for 'osu-token' in the headers.
-    # if it's not there, this is a login request.
-
-    if "osu-token" not in request.headers:
-        # login is a bit of a special case,
-        # so we'll handle it separately.
+    if osu_token is None:
+        # the client is performing a login
         async with app.state.sessions.players._lock:
             async with app.state.services.database.connection() as db_conn:
                 login_data = await login(await request.body(), ip, db_conn)
 
-        if login_data is None:
-            # invalid login; failed.
-            return
-
-        token, body = login_data
-
         return Response(
-            content=body,
-            headers={"cho-token": token},
+            content=login_data["response_body"],
+            headers={"cho-token": login_data["osu_token"]},
         )
 
     # get the player from the specified osu token.
-    player = app.state.sessions.players.get(token=request.headers["osu-token"])
+    player = app.state.sessions.players.get(token=osu_token)
 
     if not player:
-        # token not found; chances are that we just restarted
-        # the server - tell their client to reconnect immediately.
-        # (send 0ms restart packet since the server is already up)
+        # chances are, we just restarted the server
+        # tell their client to reconnect immediately.
         return Response(
-            content=app.packets.notification("Server has restarted.")
-            + app.packets.restart_server(0),
+            content=(
+                app.packets.notification("Server has restarted.")
+                + app.packets.restart_server(0)  # ms until reconnection
+            ),
         )
 
-    # restricted users may only use certain packet handlers.
-    if not player.restricted:
-        packet_map = app.state.packets["all"]
-    else:
+    if player.restricted:
+        # restricted users may only use certain packet handlers.
         packet_map = app.state.packets["restricted"]
+    else:
+        packet_map = app.state.packets["all"]
 
     # bancho connections can be comprised of multiple packets;
     # our reader is designed to iterate through them individually,
     # allowing logic to be implemented around the actual handler.
     # NOTE: any unhandled packets will be ignored internally.
 
-    packets_handled = []
     with memoryview(await request.body()) as body_view:
         for packet in BanchoPacketReader(body_view, packet_map):
             await packet.handle(player)
-            packets_handled.append(packet.__class__.__name__)
-
-    if app.settings.DEBUG:
-        packets_str = ", ".join(packets_handled) or "None"
-        log(f"[BANCHO] {player} | {packets_str}.", RGB(0xFF68AB))
 
     player.last_recv_time = time.time()
 
-    return Response(content=player.dequeue())
+    response_data = player.dequeue()
+    return Response(content=response_data)
 
 
 """ Packet logic """
@@ -427,11 +388,16 @@ OFFLINE_NOTIFICATION = app.packets.notification(
 DELTA_90_DAYS = timedelta(days=90)
 
 
+class LoginResponse(TypedDict):
+    osu_token: str
+    response_body: bytes
+
+
 async def login(
     body: bytes,
     ip: IPAddress,
     db_conn: databases.core.Connection,
-) -> Optional[tuple[str, bytes]]:
+) -> LoginResponse:
     """\
     Login has no specific packet, but happens when the osu!
     client sends a request without an 'osu-token' header.
@@ -460,18 +426,27 @@ async def login(
 
     if len(split := body.decode().split("\n")[:-1]) != 3:
         log(f"Invalid login request from {ip}.", Ansi.LRED)
-        return  # invalid request
+        return {
+            "osu_token": "invalid-request",
+            "response_body": b"",
+        }
 
     username = split[0]
     pw_md5 = split[1].encode()
 
     if len(client_info := split[2].split("|")) != 5:
-        return  # invalid request
+        return {
+            "osu_token": "invalid-request",
+            "response_body": b"",
+        }
 
     osu_ver_str = client_info[0]
 
     if not (r_match := regexes.OSU_VERSION.match(osu_ver_str)):
-        return  # invalid request
+        return {
+            "osu_token": "invalid-request",
+            "response_body": b"",
+        }
 
     # quite a bit faster than using dt.strptime.
     osu_ver_date = date(
@@ -491,18 +466,29 @@ async def login(
         # this is currently slow, but asottile is on the
         # case https://bugs.python.org/issue44307 :D
         if osu_ver_date < (date.today() - DELTA_90_DAYS):
-            return "no", app.packets.version_update_forced() + app.packets.user_id(-2)
+            return {
+                "osu_token": "client-too-old",
+                "response_body": (
+                    app.packets.version_update_forced() + app.packets.user_id(-2)
+                ),
+            }
 
     # ensure utc_offset is a number (negative inclusive).
     if not client_info[1].replace("-", "").isdecimal():
-        return  # invalid request
+        return {
+            "osu_token": "invalid-request",
+            "response_body": b"",
+        }
 
     utc_offset = int(client_info[1])
     # display_city = client_info[2] == '1'
 
     client_hashes = client_info[3][:-1].split(":")
     if len(client_hashes) != 5:
-        return
+        return {
+            "osu_token": "invalid-request",
+            "response_body": b"",
+        }
 
     # TODO: should these be stored in player object?
     (
@@ -517,10 +503,15 @@ async def login(
     adapters = [a for a in adapters_str[:-1].split(".") if a]
 
     if not (is_wine or adapters):
-        data = app.packets.user_id(-1) + app.packets.notification(
-            "Please restart your osu! and try again.",
-        )
-        return "no", data
+        return {
+            "osu_token": "empty-adapters",
+            "response_body": (
+                app.packets.user_id(-1)
+                + app.packets.notification(
+                    "Please restart your osu! and try again.",
+                )
+            ),
+        }
 
     pm_private = client_info[4] == "1"
 
@@ -542,11 +533,15 @@ async def login(
                     p.logout()
                 else:
                     # the user is currently online, send back failure.
-                    data = app.packets.user_id(-1) + app.packets.notification(
-                        "User already logged in.",
-                    )
-
-                    return "no", data
+                    return {
+                        "osu_token": "user-ghosted",
+                        "response_body": (
+                            app.packets.user_id(-1)
+                            + app.packets.notification(
+                                "User already logged in.",
+                            )
+                        ),
+                    }
 
     user_info = await db_conn.fetch_one(
         "SELECT id, name, priv, pw_bcrypt, country, "
@@ -557,10 +552,13 @@ async def login(
 
     if not user_info:
         # no account by this name exists.
-        return "no", (
-            app.packets.notification(f"{BASE_DOMAIN}: Unknown username")
-            + app.packets.user_id(-1)
-        )
+        return {
+            "osu_token": "unknown-username",
+            "response_body": (
+                app.packets.notification(f"{BASE_DOMAIN}: Unknown username")
+                + app.packets.user_id(-1)
+            ),
+        }
 
     user_info = dict(user_info)  # make a mutable copy
 
@@ -568,7 +566,10 @@ async def login(
         user_info["priv"] & Privileges.DONATOR and user_info["priv"] & Privileges.NORMAL
     ):
         # trying to use tourney client with insufficient privileges.
-        return "no", app.packets.user_id(-1)
+        return {
+            "osu_token": "no",
+            "response_body": app.packets.user_id(-1),
+        }
 
     # get our bcrypt cache.
     bcrypt_cache = app.state.cache.bcrypt
@@ -579,16 +580,22 @@ async def login(
     # designed to be slow; we'll cache the results to speed up subsequent logins.
     if pw_bcrypt in bcrypt_cache:  # ~0.01 ms
         if pw_md5 != bcrypt_cache[pw_bcrypt]:
-            return "no", (
-                app.packets.notification(f"{BASE_DOMAIN}: Incorrect password")
-                + app.packets.user_id(-1)
-            )
+            return {
+                "osu_token": "incorrect-password",
+                "response_body": (
+                    app.packets.notification(f"{BASE_DOMAIN}: Incorrect password")
+                    + app.packets.user_id(-1)
+                ),
+            }
     else:  # ~200ms
         if not bcrypt.checkpw(pw_md5, pw_bcrypt):
-            return "no", (
-                app.packets.notification(f"{BASE_DOMAIN}: Incorrect password")
-                + app.packets.user_id(-1)
-            )
+            return {
+                "osu_token": "incorrect-password",
+                "response_body": (
+                    app.packets.notification(f"{BASE_DOMAIN}: Incorrect password")
+                    + app.packets.user_id(-1)
+                ),
+            }
 
         bcrypt_cache[pw_bcrypt] = pw_md5
 
@@ -658,12 +665,15 @@ async def login(
             if not all(
                 [hw_match["priv"] & Privileges.NORMAL for hw_match in hw_matches],
             ):
-                return "no", (
-                    app.packets.notification(
-                        "Please contact staff directly to create an account.",
-                    )
-                    + app.packets.user_id(-1)
-                )
+                return {
+                    "osu_token": "contact-staff",
+                    "response_body": (
+                        app.packets.notification(
+                            "Please contact staff directly to create an account.",
+                        )
+                        + app.packets.user_id(-1)
+                    ),
+                }
 
     """ All checks passed, player is safe to login """
 
@@ -886,7 +896,8 @@ async def login(
     )
 
     p.update_latest_activity_soon()
-    return p.token, bytes(data)
+
+    return {"osu_token": p.token, "response_body": bytes(data)}
 
 
 @register(ClientPackets.START_SPECTATING)
@@ -2024,14 +2035,12 @@ class UserPresenceRequestAll(BasePacket):
         # NOTE: this packet is only used when there
         # are >256 players visible to the client.
 
-        p.enqueue(
-            b"".join(
-                map(
-                    app.packets.user_presence,
-                    app.state.sessions.players.unrestricted,
-                ),
-            ),
-        )
+        buffer = bytearray()
+
+        for player in app.state.sessions.players.unrestricted:
+            buffer += app.packets.user_presence(player)
+
+        p.enqueue(bytes(buffer))
 
 
 @register(ClientPackets.TOGGLE_BLOCK_NON_FRIEND_DMS)

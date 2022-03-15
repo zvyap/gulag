@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import ipaddress
 import random
 import secrets
 import time
@@ -19,6 +18,8 @@ from typing import Callable
 from typing import Literal
 from typing import Mapping
 from typing import Optional
+from typing import TypeVar
+from typing import Union
 from urllib.parse import unquote
 from urllib.parse import unquote_plus
 
@@ -170,7 +171,7 @@ async def osuError(
 
 @router.post("/web/osu-screenshot.php")
 async def osuScreenshot(
-    player: "Player" = Depends(authenticate_player_session(Form, "u", "p")),
+    player: Player = Depends(authenticate_player_session(Form, "u", "p")),
     endpoint_version: int = Form(..., alias="v"),
     screenshot_file: UploadFile = File(..., alias="ss"),  # TODO: why can't i use bytes?
 ):
@@ -218,22 +219,25 @@ async def osuScreenshot(
 
 @router.get("/web/osu-getfriends.php")
 async def osuGetFriends(
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
 ):
     return "\n".join(map(str, player.friends)).encode()
 
 
-_gulag_osuapi_status_map = {0: 0, 2: 1, 3: 2, 4: 3, 5: 4}
-
-
-def gulag_to_osuapi_status(s: int) -> int:
-    return _gulag_osuapi_status_map[s]
+def gulag_to_osuapi_status(gulag_status: int) -> int:
+    return {
+        0: 0,
+        2: 1,
+        3: 2,
+        4: 3,
+        5: 4,
+    }[gulag_status]
 
 
 @router.post("/web/osu-getbeatmapinfo.php")
 async def osuGetBeatmapInfo(
     form_data: models.OsuBeatmapRequestForm,
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
     db_conn: databases.core.Connection = Depends(acquire_db_conn),
 ):
     num_requests = len(form_data.Filenames) + len(form_data.Ids)
@@ -301,7 +305,7 @@ async def osuGetBeatmapInfo(
 
 @router.get("/web/osu-getfavourites.php")
 async def osuGetFavourites(
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
     db_conn: databases.core.Connection = Depends(acquire_db_conn),
 ):
     rows = await db_conn.fetch_all(
@@ -314,7 +318,7 @@ async def osuGetFavourites(
 
 @router.get("/web/osu-addfavourite.php")
 async def osuAddFavourite(
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
     map_set_id: int = Query(..., alias="a"),
     db_conn: databases.core.Connection = Depends(acquire_db_conn),
 ):
@@ -343,7 +347,7 @@ async def lastFM(
         ),
         alias="b",
     ),
-    player: "Player" = Depends(authenticate_player_session(Query, "us", "ha")),
+    player: Player = Depends(authenticate_player_session(Query, "us", "ha")),
 ):
     if beatmap_id_or_hidden_flag[0] != "a":
         # not anticheat related, tell the
@@ -426,7 +430,7 @@ DIRECT_MAP_INFO_FMTSTR = (
 
 @router.get("/web/osu-search.php")
 async def osuSearchHandler(
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
     ranked_status: int = Query(..., alias="r", ge=0, le=8),
     query: str = Query(..., alias="q"),
     mode: int = Query(..., alias="m", ge=-1, le=3),  # -1 for all
@@ -458,20 +462,14 @@ async def osuSearchHandler(
                 if resp.status == status.HTTP_404_NOT_FOUND:
                     return b"0"
 
-            if 400 <= resp.status < 500:
-                # client error, report this to cmyui
-                stacktrace = app.utils.get_appropriate_stacktrace()
-                await app.state.services.log_strange_occurrence(stacktrace)
-
             return b"-1\nFailed to retrieve data from the beatmap mirror."
 
         result = await resp.json()
 
         if USING_CHIMU:
             if result["code"] != 0:
-                stacktrace = app.utils.get_appropriate_stacktrace()
-                await app.state.services.log_strange_occurrence(stacktrace)
                 return b"-1\nFailed to retrieve data from the beatmap mirror."
+
             result = result["data"]
 
     lresult = len(result)  # send over 100 if we receive
@@ -505,7 +503,7 @@ async def osuSearchHandler(
 # TODO: video support (needs db change)
 @router.get("/web/osu-search-set.php")
 async def osuSearchSetHandler(
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
     map_set_id: Optional[int] = Query(None, alias="s"),
     map_id: Optional[int] = Query(None, alias="b"),
     db_conn: databases.core.Connection = Depends(acquire_db_conn),
@@ -547,8 +545,11 @@ async def osuSearchSetHandler(
     # 0s are threadid, has_vid, has_story, filesize, filesize_novid
 
 
-def chart_entry(name: str, before: Optional[object], after: object) -> str:
-    return f'{name}Before:{before or ""}|{name}After:{after}'
+T = TypeVar("T", bound=Union[int, float])
+
+
+def chart_entry(name: str, before: Optional[T], after: T) -> str:
+    return f"{name}Before:{before or ''}|{name}After:{after}"
 
 
 @router.post("/web/osu-submit-modular-selector.php")
@@ -984,8 +985,8 @@ async def osuSubmitModularSelector(
                 chart_entry("maxCombo", score.prev_best.max_combo, score.max_combo),
                 chart_entry(
                     "accuracy",
-                    f"{score.prev_best.acc:.2f}",
-                    f"{score.acc:.2f}",
+                    round(score.prev_best.acc, 2),
+                    round(score.acc, 2),
                 ),
                 chart_entry("pp", score.prev_best.pp, score.pp),
             )
@@ -995,7 +996,7 @@ async def osuSubmitModularSelector(
                 chart_entry("rankedScore", prev_stats.rscore, stats.rscore),
                 chart_entry("totalScore", prev_stats.tscore, stats.tscore),
                 chart_entry("maxCombo", prev_stats.max_combo, stats.max_combo),
-                chart_entry("accuracy", f"{prev_stats.acc:.2f}", f"{stats.acc:.2f}"),
+                chart_entry("accuracy", round(prev_stats.acc, 2), round(stats.acc, 2)),
                 chart_entry("pp", prev_stats.pp, stats.pp),
             )
         else:
@@ -1005,7 +1006,7 @@ async def osuSubmitModularSelector(
                 chart_entry("rankedScore", None, score.score),
                 chart_entry("totalScore", None, score.score),
                 chart_entry("maxCombo", None, score.max_combo),
-                chart_entry("accuracy", None, f"{score.acc:.2f}"),
+                chart_entry("accuracy", None, round(score.acc, 2)),
                 chart_entry("pp", None, score.pp),
             )
 
@@ -1014,7 +1015,7 @@ async def osuSubmitModularSelector(
                 chart_entry("rankedScore", None, stats.rscore),
                 chart_entry("totalScore", None, stats.tscore),
                 chart_entry("maxCombo", None, stats.max_combo),
-                chart_entry("accuracy", None, f"{stats.acc:.2f}"),
+                chart_entry("accuracy", None, round(stats.acc, 2)),
                 chart_entry("pp", None, stats.pp),
             )
 
@@ -1054,7 +1055,7 @@ async def osuSubmitModularSelector(
 
 @router.get("/web/osu-getreplay.php")
 async def getReplay(
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
     mode: int = Query(..., alias="m", ge=0, le=3),
     score_id: int = Query(..., alias="c", min=0, max=9_223_372_036_854_775_807),
 ):
@@ -1074,7 +1075,7 @@ async def getReplay(
 
 @router.get("/web/osu-rate.php")
 async def osuRate(
-    player: "Player" = Depends(
+    player: Player = Depends(
         authenticate_player_session(Query, "u", "p", err=b"auth fail"),
     ),
     map_md5: str = Query(..., alias="c", min_length=32, max_length=32),
@@ -1145,7 +1146,7 @@ SCORE_LISTING_FMTSTR = (
 
 @router.get("/web/osu-osz2-getscores.php")
 async def getScores(
-    player: "Player" = Depends(authenticate_player_session(Query, "us", "ha")),
+    player: Player = Depends(authenticate_player_session(Query, "us", "ha")),
     get_scores: bool = Query(..., alias="s"),  # NOTE: this is flipped
     leaderboard_version: int = Query(..., alias="vv"),
     leaderboard_type: int = Query(..., alias="v", ge=0, le=4),
@@ -1158,6 +1159,10 @@ async def getScores(
     aqn_files_found: bool = Query(..., alias="a"),
     db_conn: databases.core.Connection = Depends(acquire_db_conn),
 ):
+    if get_scores or aqn_files_found:
+        stacktrace = app.utils.get_appropriate_stacktrace()
+        await app.state.services.log_strange_occurrence(stacktrace)
+
     # check if this md5 has already been  cached as
     # unsubmitted/needs update to reduce osu!api spam
     if map_md5 in app.state.cache.unsubmitted:
@@ -1355,7 +1360,7 @@ async def getScores(
 
 @router.post("/web/osu-comment.php")
 async def osuComment(
-    player: "Player" = Depends(authenticate_player_session(Form, "u", "p")),
+    player: Player = Depends(authenticate_player_session(Form, "u", "p")),
     map_id: int = Form(..., alias="b"),
     map_set_id: int = Form(..., alias="s"),
     score_id: int = Form(..., alias="r", ge=0, le=9_223_372_036_854_775_807),
@@ -1444,7 +1449,7 @@ async def osuComment(
 
 @router.get("/web/osu-markasread.php")
 async def osuMarkAsRead(
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
     channel: str = Query(..., min_length=0, max_length=32),
     db_conn: databases.core.Connection = Depends(acquire_db_conn),
 ):
@@ -1468,7 +1473,7 @@ async def osuSeasonal():
 
 @router.get("/web/bancho_connect.php")
 async def banchoConnect(
-    player: "Player" = Depends(authenticate_player_session(Query, "u", "h")),
+    player: Player = Depends(authenticate_player_session(Query, "u", "h")),
     osu_ver: str = Query(..., alias="v"),
     active_endpoint: Optional[str] = Query(None, alias="fail"),
     net_framework_vers: Optional[str] = Query(None, alias="fx"),  # delimited by |
@@ -1640,7 +1645,6 @@ async def register_account(
     check: int = Form(...),
     db_conn: databases.core.Connection = Depends(acquire_db_conn),
     cloudflare_country: Optional[str] = Header(None, alias="CF-IPCountry"),
-    cloudflare_ip: Optional[str] = Header(None, alias="CF-Connecting-IP"),
     #
     # TODO: allow nginx to be optional
     forwarded_ip: str = Header(..., alias="X-Forwarded-For"),
@@ -1729,21 +1733,7 @@ async def register_account(
             else:
                 # backup method, get the user's ip and
                 # do a db lookup to get their country.
-                if cloudflare_ip is not None:
-                    ip_str = cloudflare_ip
-                else:  # if forwarded_ip is not None:
-                    # if the request has been forwarded, get the origin
-                    forwards = forwarded_ip.split(",")
-                    if len(forwards) != 1:
-                        ip_str = forwards[0]
-                    else:
-                        ip_str = real_ip
-
-                if ip_str in app.state.cache.ip:
-                    ip = app.state.cache.ip[ip_str]
-                else:
-                    ip = ipaddress.ip_address(ip_str)
-                    app.state.cache.ip[ip_str] = ip
+                ip = app.state.services.ip_resolver.get_ip(request.headers)
 
                 if not ip.is_private:
                     if app.state.services.geoloc_db is not None:
