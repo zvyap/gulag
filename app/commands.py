@@ -17,7 +17,6 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
-from importlib.metadata import version as pkg_version
 from pathlib import Path
 from time import perf_counter_ns as clock_ns
 from typing import Any
@@ -905,7 +904,7 @@ async def user(ctx: Context) -> Optional[str]:
             f"Channels: {[p._name for p in p.channels]}",
             f"Logged in: {timeago.format(p.login_time)}",
             f"Last server interaction: {timeago.format(p.last_recv_time)}",
-            f"osu! build: {p.osu_ver} | Tourney: {p.tourney_client}",
+            f"osu! build: {p.client_details.osu_version.date} | Tourney: {p.tourney_client}",
             f"Silenced: {p.silenced} | Spectating: {p.spectating}",
             f"Last /np: {last_np}",
             f"Recent score: {p.recent_score}",
@@ -1549,9 +1548,6 @@ if app.settings.DEVELOPER_MODE:
 
         if "__py" in __py_namespace:
             del __py_namespace["__py"]
-
-        if ret is None:
-            return "Success"
 
         # TODO: perhaps size checks?
 
