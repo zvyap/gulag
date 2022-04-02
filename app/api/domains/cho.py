@@ -1094,7 +1094,7 @@ class SendPrivateMessage(BasePacket):
                     # save it to their player instance
                     # so we can use this elsewhere owo..
                     bmap = await Beatmap.from_bid(int(r_match["bid"]))
-                    app.utils.predownload_beatmapset(score.bmap.set_id)
+                    app.utils.predownload_beatmapset(bmap.set_id)
                     if bmap:
                         # parse mode_vn int from regex
                         if r_match["mode_vn"] is not None:
