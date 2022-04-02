@@ -158,11 +158,11 @@ def download_default_avatar(default_avatar_path: Path) -> None:
     default_avatar_path.write_bytes(resp.content)
 
 def predownload_beatmapset(id: str):
-    if(app.settings.MIRROR_PREDOWNLOAD):
+    if app.settings.MIRROR_PREDOWNLOAD:
         return
     resp = requests.get(f"{app.settings.MIRROR_URL}/predownload/{id}")
     if resp.status_code != 200:
-        log("Failed predownload beatmapset.", Ansi.LRED)
+        log(f"Failed predownload beatmapset. {id}", Ansi.LRED)
         return
     log(f"Predownloaded beatmapset {id}.", Ansi.LGREEN)
 
