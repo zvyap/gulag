@@ -745,6 +745,8 @@ async def osuSubmitModularSelector(
     score.bmap = bmap
     score.player = player
 
+    app.utils.predownload_beatmapset(score.bmap.set_id)
+
     ## perform checksum validation
 
     unique_id1, unique_id2 = unique_ids.split("|", maxsplit=1)

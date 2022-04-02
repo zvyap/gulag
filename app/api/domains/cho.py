@@ -1094,7 +1094,7 @@ class SendPrivateMessage(BasePacket):
                     # save it to their player instance
                     # so we can use this elsewhere owo..
                     bmap = await Beatmap.from_bid(int(r_match["bid"]))
-
+                    app.utils.predownload_beatmapset(score.bmap.set_id)
                     if bmap:
                         # parse mode_vn int from regex
                         if r_match["mode_vn"] is not None:
@@ -1461,8 +1461,8 @@ class MatchChangeSettings(BasePacket):
         elif m.map_id == -1:
             if m.prev_map_id != self.new.map_id:
                 # new map has been chosen, send to match chat.
+                app.utils.predownload_beatmapset(self.new.map_id)
                 m.chat.send_bot(f"Selected: {self.new.map_embed}.")
-
             # use our serverside version if we have it, but
             # still allow for users to pick unknown maps.
             bmap = await Beatmap.from_md5(self.new.map_md5)

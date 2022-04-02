@@ -157,6 +157,14 @@ def download_default_avatar(default_avatar_path: Path) -> None:
     log("Downloaded default avatar.", Ansi.LGREEN)
     default_avatar_path.write_bytes(resp.content)
 
+def predownload_beatmapset(id: str):
+    if(app.settings.MIRROR_PREDOWNLOAD):
+        return
+    resp = requests.get(f"{app.settings.MIRROR_URL}/predownload/{id}")
+    if resp.status_code != 200:
+        log("Failed predownload beatmapset.", Ansi.LRED)
+        return
+    log(f"Predownloaded beatmapset {id}.", Ansi.LGREEN)
 
 def seconds_readable(seconds: int) -> str:
     """Turn seconds as an int into 'DD:HH:MM:SS'."""
