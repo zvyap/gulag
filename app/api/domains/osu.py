@@ -513,11 +513,10 @@ async def osuSearchHandler(
             # convert to osu!api status
             params["status"] = RankedStatus.from_osudirect(ranked_status).osu_api
 
-
     async with app.state.services.http.get(search_url, params=params) as resp:
         if resp.status != status.HTTP_200_OK:
             if CURRENT_MIRROR_TYPE == MIRROR_TYPE.CHIMU or MIRROR_TYPE.NERINYAN:
-                # chimu uses 404 for no maps found
+                # chimu and nerinyan uses 404 for no maps found
                 if resp.status == status.HTTP_404_NOT_FOUND:
                     return b"0"
 
@@ -526,7 +525,7 @@ async def osuSearchHandler(
         result = await resp.json()
 
         if CURRENT_MIRROR_TYPE == MIRROR_TYPE.CHIMU:
-            if result["code"] != 0:
+            if result["code"] != 200:
                 return b"-1\nFailed to retrieve data from the beatmap mirror."
 
             result = result["data"]
@@ -546,7 +545,9 @@ async def osuSearchHandler(
             bmap["Title"] = bmap.pop("title")
             bmap["LastUpdate"] = bmap.pop("last_updated")
             bmap["Creator"] = bmap.pop("creator")
-            if bmap["status"] == "graveyard": # RankedStatus enum didn't support graveyard/wip yet
+            if (
+                bmap["status"] == "graveyard"
+            ):  # RankedStatus enum didn't support graveyard/wip yet
                 bmap["RankedStatus"] = -2
             elif bmap["status"] == "wip":
                 bmap["RankedStatus"] = -1
@@ -1530,8 +1531,9 @@ async def getScores(
     ## construct response for osu! client
 
     response_lines: list[str] = [
-        # {ranked_status}|{serv_has_osz2}|{bid}|{bsid}|{len(scores)}
-        f"{int(bmap.status)}|false|{bmap.id}|{bmap.set_id}|{len(score_rows)}",
+        # NOTE: fa stands for featured artist (for the ones that may not know)
+        # {ranked_status}|{serv_has_osz2}|{bid}|{bsid}|{len(scores)}|{fa_track_id}|{fa_license_text}
+        f"{int(bmap.status)}|false|{bmap.id}|{bmap.set_id}|{len(score_rows)}|0|",
         # {offset}\n{beatmap_name}\n{rating}
         # TODO: server side beatmap offsets
         f"0\n{bmap.full_name}\n{rating}",
