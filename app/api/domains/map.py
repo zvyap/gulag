@@ -18,7 +18,7 @@ async def preview(beatmap_set_id: int) -> RedirectResponse:
 
     if USING_MINO:
         # mino provides full-quality audio previews
-        url = f"https://catboy.best/api/preview/audio/{beatmap_set_id}?set=1"
+        url = f"{app.settings.MIRROR_URL}/api/preview/audio/{beatmap_set_id}?set=1"
     else:
         # official osu! servers use lossy compression
         url = f"https://b.ppy.sh/preview/{beatmap_set_id}.mp3"
