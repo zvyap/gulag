@@ -6,6 +6,8 @@ import time
 import app.packets
 import app.settings
 import app.state
+from app import repositories
+from app import usecases
 from app.constants.privileges import Privileges
 from app.logging import Ansi
 from app.logging import log
@@ -46,26 +48,18 @@ async def _remove_expired_donation_privileges(interval: int) -> None:
         )
 
         for expired_donor in expired_donors:
-            p = await app.state.sessions.players.from_cache_or_sql(
-                id=expired_donor["id"],
-            )
+            player = await repositories.players.fetch(id=expired_donor["id"])
+            assert player is not None
 
-            assert p is not None
+            await usecases.players.remove_privileges(player, Privileges.DONATOR)
+            await usecases.players.reset_donator_time(player)
 
-            # TODO: perhaps make a `revoke_donor` method?
-            await p.remove_privs(Privileges.DONATOR)
-            p.donor_end = 0
-            await app.state.services.database.execute(
-                "UPDATE users SET donor_end = 0 WHERE id = :id",
-                {"id": p.id},
-            )
-
-            if p.online:
-                p.enqueue(
+            if player.online:
+                player.enqueue(
                     app.packets.notification("Your supporter status has expired."),
                 )
 
-            log(f"{p}'s supporter status has expired.", Ansi.LMAGENTA)
+            log(f"{player}'s supporter status has expired.", Ansi.LMAGENTA)
 
         await asyncio.sleep(interval)
 
@@ -77,10 +71,10 @@ async def _disconnect_ghosts(interval: int) -> None:
         await asyncio.sleep(interval)
         current_time = time.time()
 
-        for p in app.state.sessions.players:
-            if current_time - p.last_recv_time > OSU_CLIENT_MIN_PING_INTERVAL:
-                log(f"Auto-dced {p}.", Ansi.LMAGENTA)
-                p.logout()
+        for player in app.state.sessions.players:
+            if current_time - player.last_recv_time > OSU_CLIENT_MIN_PING_INTERVAL:
+                log(f"Auto-dced {player}.", Ansi.LMAGENTA)
+                await usecases.players.logout(player)
 
 
 async def _update_bot_status(interval: int) -> None:

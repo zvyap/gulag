@@ -19,7 +19,7 @@ from fastapi.responses import ORJSONResponse
 from fastapi.responses import Response
 from starlette.middleware.base import RequestResponseEndpoint
 
-import app.bg_loops
+import app.housekeeping
 import app.settings
 import app.state
 import app.utils
@@ -27,7 +27,6 @@ from app.api import domains
 from app.api import middlewares
 from app.logging import Ansi
 from app.logging import log
-from app.objects import collections
 
 
 class BanchoAPI(FastAPI):
@@ -119,7 +118,7 @@ def init_events(asgi_app: BanchoAPI) -> None:
                 Ansi.LRED,
             )
 
-        app.state.services.http = aiohttp.ClientSession(
+        app.state.services.http_client = aiohttp.ClientSession(
             json_serialize=lambda x: orjson.dumps(x).decode(),
         )
         await app.state.services.database.connect()
@@ -137,9 +136,9 @@ def init_events(asgi_app: BanchoAPI) -> None:
         await app.state.services.run_sql_migrations()
 
         async with app.state.services.database.connection() as db_conn:
-            await collections.initialize_ram_caches(db_conn)
+            await app.state.sessions.init_server_state(db_conn)
 
-        await app.bg_loops.initialize_housekeeping_tasks()
+        await app.housekeeping.initialize_housekeeping_tasks()
 
         log("Startup process complete.", Ansi.LGREEN)
         log(f"Listening @ {app.settings.SERVER_ADDR}", Ansi.LMAGENTA)
@@ -152,7 +151,7 @@ def init_events(asgi_app: BanchoAPI) -> None:
 
         # shutdown services
 
-        await app.state.services.http.close()
+        await app.state.services.http_client.close()
         await app.state.services.database.disconnect()
         await app.state.services.redis.close()
 

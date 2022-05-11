@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import struct
+import warnings
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -312,8 +313,6 @@ class BanchoPacketReader:
     ...     for packet in BanchoPacketReader(conn.body):
     ...         await packet.handle()
     """
-
-    __slots__ = ("body_view", "packet_map", "current_len")
 
     def __init__(self, body_view: memoryview, packet_map: PacketMap) -> None:
         self.body_view = body_view  # readonly
@@ -770,6 +769,12 @@ def pong() -> bytes:
 # packet id: 9
 # NOTE: deprecated
 def change_username(old: str, new: str) -> bytes:
+    warnings.warn(
+        "the osu! team has deprecated the change_username() packet, "
+        "it will have no effects on the osu! client.",
+        DeprecationWarning,
+    )
+
     return write(
         ServerPackets.HANDLE_IRC_CHANGE_USERNAME,
         (f"{old}>>>>{new}", osuTypes.string),
@@ -1089,7 +1094,6 @@ def main_menu_icon(icon_url: str, onclick_url: str) -> bytes:
 
 # packet id: 80
 # NOTE: deprecated
-@cache
 def monitor() -> bytes:
     # this is an older (now removed) 'anticheat' feature of the osu!
     # client; basically, it would do some checks (most likely for aqn),
@@ -1098,6 +1102,13 @@ def monitor() -> bytes:
 
     # this doesn't work on newer clients, and i had no plans
     # of trying to put it to use - just coded for completion.
+
+    warnings.warn(
+        "the osu! team has deprecated the monitor() packet, "
+        "it will have no effects on the osu! client.",
+        DeprecationWarning,
+    )
+
     return write(ServerPackets.MONITOR)
 
 
@@ -1183,7 +1194,7 @@ def match_invite(p: Player, t_name: str) -> bytes:
 
 # packet id: 89
 @cache
-def channel_info_end() -> bytes:
+def channel_info_end_marker() -> bytes:
     return write(ServerPackets.CHANNEL_INFO_END)
 
 
@@ -1255,6 +1266,13 @@ def rtx(msg: str) -> bytes:
     # to show some visual effects on screen for 5 seconds:
     # - black screen, freezes game, beeps loudly.
     # within the next 3-8 seconds at random.
+
+    warnings.warn(
+        "the osu! team has deprecated the rtx() packet, "
+        "it will have no effects on the osu! client.",
+        DeprecationWarning,
+    )
+
     return write(ServerPackets.RTX, (msg, osuTypes.string))
 
 

@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-from enum import IntEnum
-from enum import IntFlag
-from enum import unique
-
-from app.utils import escape_enum
-from app.utils import pymysql_encode
-
 __all__ = ("Privileges", "ClientPrivileges", "ClanPrivileges")
 
 
-@unique
-@pymysql_encode(escape_enum)
-class Privileges(IntFlag):
+class Privileges:
     """Server side user privileges."""
 
+    ANYONE = 0
+
     # privileges intended for all normal players.
-    NORMAL = 1 << 0  # is an unbanned player.
+    UNRESTRICTED = 1 << 0  # is an unbanned player.
     VERIFIED = 1 << 1  # has logged in to the server in-game.
 
     # has bypass to low-ceiling anticheat measures (trusted).
@@ -30,7 +23,7 @@ class Privileges(IntFlag):
     ALUMNI = 1 << 7
 
     # staff permissions, able to manage server app.state.
-    TOURNAMENT = 1 << 10  # able to manage match state without host.
+    TOURNEY_MANAGER = 1 << 10  # able to manage match state without host.
     NOMINATOR = 1 << 11  # able to manage maps ranked status.
     MODERATOR = 1 << 12  # able to manage users (level 1).
     ADMINISTRATOR = 1 << 13  # able to manage users (level 2).
@@ -40,9 +33,36 @@ class Privileges(IntFlag):
     STAFF = MODERATOR | ADMINISTRATOR | DEVELOPER
 
 
-@unique
-@pymysql_encode(escape_enum)
-class ClientPrivileges(IntFlag):
+def privileges_to_str(privileges: int) -> str:
+    privilege_strings = []
+
+    if privileges & Privileges.UNRESTRICTED:
+        privilege_strings.append("Unrestricted")
+    if privileges & Privileges.VERIFIED:
+        privilege_strings.append("Verified")
+    if privileges & Privileges.WHITELISTED:
+        privilege_strings.append("Whitelisted")
+    if privileges & Privileges.SUPPORTER:
+        privilege_strings.append("Supporter")
+    if privileges & Privileges.PREMIUM:
+        privilege_strings.append("Premium")
+    if privileges & Privileges.ALUMNI:
+        privilege_strings.append("Alumni")
+    if privileges & Privileges.TOURNEY_MANAGER:
+        privilege_strings.append("Tourney Manager")
+    if privileges & Privileges.NOMINATOR:
+        privilege_strings.append("Nominator")
+    if privileges & Privileges.MODERATOR:
+        privilege_strings.append("Moderator")
+    if privileges & Privileges.ADMINISTRATOR:
+        privilege_strings.append("Administrator")
+    if privileges & Privileges.DEVELOPER:
+        privilege_strings.append("Developer")
+
+    return " | ".join(privilege_strings)
+
+
+class ClientPrivileges:
     """Client side user privileges."""
 
     PLAYER = 1 << 0
@@ -53,11 +73,9 @@ class ClientPrivileges(IntFlag):
     TOURNAMENT = 1 << 5  # NOTE: not used in communications with osu! client
 
 
-@unique
-@pymysql_encode(escape_enum)
-class ClanPrivileges(IntEnum):
+class ClanPrivileges:
     """A class to represent a clan members privs."""
 
-    Member = 1
-    Officer = 2
-    Owner = 3
+    MEMBER = 1
+    OFFICER = 2
+    OWNER = 3

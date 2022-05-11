@@ -15,39 +15,26 @@ SERVER_PORT: Optional[int] = (
 )
 
 DB_DSN: DatabaseURL = config("DB_DSN", cast=DatabaseURL)
+TEST_DB_DSN: DatabaseURL = config("TEST_DB_DSN", cast=DatabaseURL)
+
 REDIS_DSN: str = config("REDIS_DSN")
 
 OSU_API_KEY: Secret = config("OSU_API_KEY", cast=Secret)
 
-DOMAIN: str = config("DOMAIN", default="cmyui.xyz")
-MIRROR_URL: str = config("MIRROR_URL", default="https://api.chimu.moe/v1")
-MIRROR_TYPE: str = config("MIRROR_TYPE", default="CHIMU")
-MIRROR_PREDOWNLOAD: bool = config("MIRROR_PREDOWNLOAD", cast=bool, default=False)
+DOMAIN: str = config("DOMAIN")
+MIRROR_URL: str = config("MIRROR_URL")
 
-COMMAND_PREFIX: str = config("COMMAND_PREFIX", default="!")
+COMMAND_PREFIX: str = config("COMMAND_PREFIX")
+SEASONAL_BGS: CommaSeparatedStrings = config("SEASONAL_BGS", cast=CommaSeparatedStrings)
 
-SEASONAL_BGS: CommaSeparatedStrings = config(
-    "SEASONAL_BGS",
-    cast=CommaSeparatedStrings,
-    default=CommaSeparatedStrings(
-        [
-            "https://akatsuki.pw/static/flower.png",
-            "https://i.cmyui.xyz/nrMT4V2RR3PR.jpeg",
-        ],
-    ),
-)
-
-MENU_ICON_URL: str = config(
-    "MENU_ICON_URL",
-    default="https://akatsuki.pw/static/logos/logo_ingame.png",
-)
-MENU_ONCLICK_URL: str = config("MENU_ONCLICK_URL", default="https://akatsuki.pw")
+MENU_ICON_URL: str = config("MENU_ICON_URL")
+MENU_ONCLICK_URL: str = config("MENU_ONCLICK_URL")
 
 DATADOG_API_KEY: Secret = config("DATADOG_API_KEY", cast=Secret)
 DATADOG_APP_KEY: Secret = config("DATADOG_APP_KEY", cast=Secret)
 
-DEBUG: bool = config("DEBUG", cast=bool, default=False)
-REDIRECT_OSU_URLS: bool = config("REDIRECT_OSU_URLS", cast=bool, default=True)
+DEBUG: bool = config("DEBUG", cast=bool)
+REDIRECT_OSU_URLS: bool = config("REDIRECT_OSU_URLS", cast=bool)
 
 PP_CACHED_ACCURACIES: list[int] = [
     int(acc)
@@ -68,17 +55,12 @@ DISALLOWED_NAMES: CommaSeparatedStrings = config(
     "DISALLOWED_NAMES",
     cast=CommaSeparatedStrings,
 )
-DISALLOWED_PASSWORDS: CommaSeparatedStrings = config(
-    "DISALLOWED_PASSWORDS",
-    cast=CommaSeparatedStrings,
-)
 
 DISCORD_AUDIT_LOG_WEBHOOK: str = config("DISCORD_AUDIT_LOG_WEBHOOK")
 
 AUTOMATICALLY_REPORT_PROBLEMS: bool = config(
     "AUTOMATICALLY_REPORT_PROBLEMS",
     cast=bool,
-    default=True,
 )
 
 # advanced dev settings
@@ -86,7 +68,7 @@ AUTOMATICALLY_REPORT_PROBLEMS: bool = config(
 ## WARNING: only touch this once you've
 ##          read through what it enables.
 ##          you could put your server at risk.
-DEVELOPER_MODE: bool = config("DEVELOPER_MODE", cast=bool, default=False)
+DEVELOPER_MODE: bool = config("DEVELOPER_MODE", cast=bool)
 
 ## WARNING: only touch this if you know how
 ##          the migrations system works.
