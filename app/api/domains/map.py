@@ -6,7 +6,7 @@ from fastapi import status
 from fastapi.requests import Request
 from fastapi.responses import RedirectResponse
 
-# import app.settings
+import app.settings
 
 router = APIRouter(tags=["Beatmaps"])
 
