@@ -1237,7 +1237,7 @@ async def get_leaderboard_scores(
         "FROM scores s "
         "INNER JOIN users u ON u.id = s.userid "
         "LEFT JOIN clans c ON c.id = u.clan_id "
-        "WHERE s.map_md5 = :map_md5 AND s.status = 2 "  # 2: =best score
+        f"WHERE s.map_md5 = :map_md5 AND s.status != {2 if leaderboard_type != LeaderboardType.Country else 0} "  # 2: =best score
         "AND (u.priv & 1 OR u.id = :user_id) AND mode = :mode",
     ]
 
@@ -1249,9 +1249,9 @@ async def get_leaderboard_scores(
     elif leaderboard_type == LeaderboardType.Friends:
         query.append("AND s.userid IN :friends")
         params["friends"] = player.friends | {player.id}
-    elif leaderboard_type == LeaderboardType.Country:
-        query.append("AND u.country = :country")
-        params["country"] = player.geoloc["country"]["acronym"]
+    # elif leaderboard_type == LeaderboardType.Country:
+    #     query.append("AND u.country = :country")
+    #     params["country"] = player.geoloc["country"]["acronym"]
 
     # TODO: customizability of the number of scores
     query.append("ORDER BY _score DESC LIMIT 50")
