@@ -6,9 +6,15 @@ from fastapi import status
 from fastapi.requests import Request
 from fastapi.responses import RedirectResponse
 
+import app.settings
+
 # import app.settings
 
 router = APIRouter(tags=["Beatmaps"])
+
+@router.get("/preview/{beatmap_set_id}.mp3")
+async def preview(beatmap_set_id: int) -> RedirectResponse:
+    return RedirectResponse(f"{app.settings.MIRROR_BEATMAP_PREVIEW}/{beatmap_set_id}", status_code=status.HTTP_301_MOVED_PERMANENTLY)
 
 
 # forward any unmatched request to osu!

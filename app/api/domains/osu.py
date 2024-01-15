@@ -1,6 +1,7 @@
 """ osu: handle connections from web, api, and beyond? """
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import random
@@ -50,13 +51,14 @@ from app.constants.clientflags import LastFMFlags
 from app.constants.gamemodes import GameMode
 from app.constants.mods import Mods
 from app.constants.privileges import Privileges
+from app.discord import Webhook
 from app.logging import Ansi
 from app.logging import log
 from app.logging import printc
 from app.objects import models
 from app.objects.beatmap import Beatmap
-from app.objects.beatmap import ensure_local_osu_file
 from app.objects.beatmap import RankedStatus
+from app.objects.beatmap import ensure_local_osu_file
 from app.objects.player import Player
 from app.objects.score import Grade
 from app.objects.score import Score
@@ -70,7 +72,6 @@ from app.usecases import achievements as achievements_usecases
 from app.usecases import user_achievements as user_achievements_usecases
 from app.utils import escape_enum
 from app.utils import pymysql_encode
-
 
 BEATMAPS_PATH = SystemPath.cwd() / ".data/osu"
 REPLAYS_PATH = SystemPath.cwd() / ".data/osr"
@@ -899,8 +900,13 @@ async def osuSubmitModularSelector(
                             ),
                         )
 
+                webhook_url = app.settings.DISCORD_AUDIT_LOG_WEBHOOK
+                announcement_msg = " ".join(ann)
+                if webhook_url:
+                    webhook = Webhook(webhook_url, content=announcement_msg)
+                    asyncio.create_task(webhook.post())
                 assert announce_chan is not None
-                announce_chan.send(" ".join(ann), sender=score.player, to_self=True)
+                announce_chan.send(announcement_msg, sender=score.player, to_self=True)
 
         # this score is our best score.
         # update any preexisting personal best
@@ -1315,11 +1321,11 @@ async def get_leaderboard_scores(
         "s.max_combo, s.n50, s.n100, s.n300, "
         "s.nmiss, s.nkatu, s.ngeki, s.perfect, s.mods, "
         "UNIX_TIMESTAMP(s.play_time) time, u.id userid, "
-        "COALESCE(CONCAT('[', c.tag, '] ', u.name), u.name) AS name "
+        f"COALESCE(CONCAT('[', {'c.tag' if leaderboard_type != LeaderboardType.Country else 's.id'}, '] ', u.name), u.name) AS name "
         "FROM scores s "
         "INNER JOIN users u ON u.id = s.userid "
         "LEFT JOIN clans c ON c.id = u.clan_id "
-        "WHERE s.map_md5 = :map_md5 AND s.status = 2 "  # 2: =best score
+        f"WHERE s.map_md5 = :map_md5 AND {'s.status = 2' if leaderboard_type != LeaderboardType.Country else 's.status != 0'} "  # 2: =best score
         "AND (u.priv & 1 OR u.id = :user_id) AND mode = :mode",
     ]
 
@@ -1335,9 +1341,9 @@ async def get_leaderboard_scores(
     elif leaderboard_type == LeaderboardType.Friends:
         query.append("AND s.userid IN :friends")
         params["friends"] = player.friends | {player.id}
-    elif leaderboard_type == LeaderboardType.Country:
-        query.append("AND u.country = :country")
-        params["country"] = player.geoloc["country"]["acronym"]
+    # elif leaderboard_type == LeaderboardType.Country:
+    #     query.append("AND u.country = :country")
+    #     params["country"] = player.geoloc["country"]["acronym"]
 
     # TODO: customizability of the number of scores
     query.append("ORDER BY _score DESC LIMIT 50")
